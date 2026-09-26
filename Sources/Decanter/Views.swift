@@ -483,3 +483,49 @@ private struct EngineSettings: View {
         }
     }
 }
+
+// MARK: - About
+
+struct AboutView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 128, height: 128)
+            Text("Decanter").font(.title.bold())
+            Text("Version \(Updates.currentVersion) (\(Updates.build))")
+                .foregroundStyle(.secondary)
+            status
+                .font(.callout)
+                .frame(minHeight: 22)
+            Button("Check for Updates") { model.checkForUpdates(userInitiated: true, answerInAbout: true) }
+                .disabled(model.updateStatus == .checking)
+        }
+        .padding(28)
+        .frame(width: 320)
+    }
+
+    @ViewBuilder private var status: some View {
+        switch model.updateStatus {
+        case .unknown:
+            Color.clear.frame(height: 1)
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking for updates…").foregroundStyle(.secondary)
+            }
+        case .upToDate:
+            Text("You have the latest version.").foregroundStyle(.secondary)
+        case .failed:
+            Text("Couldn’t check for updates.").foregroundStyle(.secondary)
+        case let .available(release):
+            HStack(spacing: 8) {
+                Text("Decanter \(release.version) is out.")
+                Button("Download") { NSWorkspace.shared.open(release.htmlURL) }
+                    .buttonStyle(.link)
+            }
+        }
+    }
+}

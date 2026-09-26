@@ -99,6 +99,7 @@ final class AppModel {
     var alert: String?
     /// A newer release than this one, until the player dismisses it.
     var update: Updates.Release?
+    var updateStatus = Updates.Status.unknown
 
     @ObservationIgnored private var runningWine: [UUID: WineBinary] = [:]
     @ObservationIgnored private var launchedAt: [UUID: Date] = [:]
@@ -130,24 +131,26 @@ final class AppModel {
 
     // MARK: Updates
 
-    /// At launch this checks at most once a day and stays quiet about errors and skipped
-    /// versions. Check for Updates… asks right away and always answers.
-    func checkForUpdates(userInitiated: Bool = false) {
-        let defaults = UserDefaults.standard
-        if !userInitiated, let last = defaults.object(forKey: "lastUpdateCheck") as? Date,
-           Date().timeIntervalSince(last) < 24 * 60 * 60 { return }
+    /// Every launch checks quietly, and says nothing about errors or a version the player
+    /// skipped. Check for Updates… always answers: from the menu with an alert, from the
+    /// About window in place.
+    func checkForUpdates(userInitiated: Bool = false, answerInAbout: Bool = false) {
+        guard updateStatus != .checking else { return }
+        updateStatus = .checking
+        let alerts = userInitiated && !answerInAbout
         Task {
             do {
-                let release = try await Updates.latest()
-                defaults.set(Date(), forKey: "lastUpdateCheck")
-                if let release, Updates.isNewer(release.version, than: Updates.currentVersion),
-                   userInitiated || defaults.string(forKey: "skippedVersion") != release.version {
-                    update = release
-                } else if userInitiated {
-                    alert = "Decanter \(Updates.currentVersion) is the latest version."
+                if let release = try await Updates.latest(), Updates.isNewer(release.version, than: Updates.currentVersion) {
+                    updateStatus = .available(release)
+                    let skipped = UserDefaults.standard.string(forKey: "skippedVersion") == release.version
+                    if !answerInAbout, userInitiated || !skipped { update = release }
+                } else {
+                    updateStatus = .upToDate
+                    if alerts { alert = "Decanter \(Updates.currentVersion) is the latest version." }
                 }
             } catch {
-                if userInitiated { alert = "Couldn’t check for updates. Check your internet connection and try again." }
+                updateStatus = .failed
+                if alerts { alert = "Couldn’t check for updates. Check your internet connection and try again." }
             }
         }
     }

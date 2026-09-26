@@ -14,6 +14,12 @@ struct DecanterApp: App {
         .defaultSize(width: 900, height: 600)
         .commands { AppCommands(model: model) }
 
+        Window("About Decanter", id: "about") {
+            AboutView().environment(model)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+
         Settings {
             SettingsView().environment(model)
         }
@@ -44,9 +50,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct AppCommands: Commands {
     let model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
-        CommandGroup(after: .appInfo) {
+        CommandGroup(replacing: .appInfo) {
+            Button("About Decanter") { openWindow(id: "about") }
             Button("Check for Updates…") { model.checkForUpdates(userInitiated: true) }
         }
         CommandGroup(replacing: .newItem) {

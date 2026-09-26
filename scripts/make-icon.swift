@@ -3,7 +3,7 @@
 import AppKit
 
 let canvas = 1024
-let fit = 880.0  // The artwork's longer side, leaving the margin macOS icons have.
+let fit = 1000.0  // The artwork's longer side: it fills the icon, with just enough room for its outline.
 
 let source = NSBitmapImageRep(data: NSImage(contentsOfFile: CommandLine.arguments[1])!.tiffRepresentation!)!
 var (minX, minY, maxX, maxY) = (source.pixelsWide, source.pixelsHigh, 0, 0)

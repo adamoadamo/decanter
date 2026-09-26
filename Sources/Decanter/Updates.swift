@@ -5,7 +5,12 @@ import Foundation
 enum Updates {
     static let repo = "adamoadamo/decanter"
 
-    struct Release: Decodable, Identifiable {
+    enum Status: Equatable {
+        case unknown, checking, upToDate, failed
+        case available(Release)
+    }
+
+    struct Release: Decodable, Identifiable, Equatable {
         let tagName: String
         let htmlURL: URL
         let body: String?
@@ -20,6 +25,10 @@ enum Updates {
 
     static var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    static var build: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
 
     /// The newest published release, or nil if there isn't one yet (GitHub answers 404).

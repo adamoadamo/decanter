@@ -93,6 +93,10 @@ The code is in `Sources/Decanter/`:
 
 The two versions of Wine are CrossOver 24, built by the [Sikarugir](https://github.com/Sikarugir-App) project (the default), and Wine Staging, from [Gcenx's builds](https://github.com/Gcenx/macOS_Wine_builds).
 
+## Credits
+
+App Icon by [Suerynn Lee](https://www.suerynn.com/)
+
 ## License
 
 Decanter is open source under the [MIT License](LICENSE). Wine and the other software Decanter downloads for you come with their own licenses.

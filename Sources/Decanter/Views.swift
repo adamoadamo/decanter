@@ -169,9 +169,7 @@ struct GameDetailView: View {
                     HStack(spacing: 18) {
                         GameIcon(game: game, size: 80)
                         VStack(alignment: .leading, spacing: 6) {
-                            TextField("Name", text: binding.name)
-                                .labelsHidden()  // A Form otherwise shows "Name" beside the title.
-                                .textFieldStyle(.plain)
+                            Text(game.name)
                                 .font(.title.bold())
                             Button {
                                 NSWorkspace.shared.activateFileViewerSelecting([game.url])

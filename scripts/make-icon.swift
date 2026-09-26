@@ -1,9 +1,12 @@
-// Fits the artwork in Resources/AppIcon.png onto the 1024×1024 macOS icon canvas, centred,
-// trimmed to its visible pixels. Usage: `swift make-icon.swift AppIcon.png out.png`
+// Fits the icon in Resources/AppIcon.png (a finished rounded-square icon, e.g. exported from
+// Icon Composer) onto the 1024×1024 macOS icon canvas, centred and trimmed to its visible
+// pixels. Usage: `swift make-icon.swift AppIcon.png out.png`
 import AppKit
 
 let canvas = 1024
-let fit = 1000.0  // The artwork's longer side: it fills the icon, with just enough room for its outline.
+// The macOS icon grid: an 824-pixel rounded square in the middle of the canvas. macOS 26 then
+// draws it as a proper app icon, without the grey tile it gives any other shape.
+let fit = 824.0
 
 let source = NSBitmapImageRep(data: NSImage(contentsOfFile: CommandLine.arguments[1])!.tiffRepresentation!)!
 var (minX, minY, maxX, maxY) = (source.pixelsWide, source.pixelsHigh, 0, 0)

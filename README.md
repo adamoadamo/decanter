@@ -1,4 +1,4 @@
-<center><img src="Resources/AppIcon.png" width="400" alt="Decanter's icon: two bunnies drawn in black outline"></center>
+<img src="Resources/AppIcon.png" width="300" alt="Decanter's icon: two bunnies drawn in black outline">
 
 # Decanter
 

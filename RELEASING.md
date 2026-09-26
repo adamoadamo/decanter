@@ -16,7 +16,9 @@ The only secrets are the private key and the notary password, and both stay in t
 
 ## Current state
 
-- Latest release: 1.2.2 (build 5): the new icon, and a game's name is no longer editable. Notarised 26 Sep 2026 (submission `a83ad9db-cca7-443b-90ed-14f25d8ce7ab`), published as [v1.2.2](https://github.com/adamoadamo/decanter/releases/tag/v1.2.2). The next release needs a new version number.
+- Latest release: 1.2.3 (build 6): Decanter installs updates itself (Install and Relaunch). Notarised 26 Sep 2026 (submission `052993ea-43b9-4a14-8e56-96c36720055f`), published as [v1.2.3](https://github.com/adamoadamo/decanter/releases/tag/v1.2.3). The next release needs a new version number.
+- From 1.2.3 on, an update is installed from the release's `.zip` asset, which must be signed with the same Developer ID and bundle id, so always attach the notarised zip (`build.sh --release` does). 1.2.2 and earlier only open the release page.
+- 1.2.2 (build 5): the new icon, and a game's name is no longer editable. Submission `a83ad9db-cca7-443b-90ed-14f25d8ce7ab`, [v1.2.2](https://github.com/adamoadamo/decanter/releases/tag/v1.2.2).
 - 1.2.1 (build 4): bigger icon, Check for Updates in About, a check on every launch. Submission `a5725f1b-b9fe-4a12-a221-7dd1c302a969`, [v1.2.1](https://github.com/adamoadamo/decanter/releases/tag/v1.2.1).
 - 1.2 (build 3), the first under the name Decanter: notarised 26 Sep 2026 (submission `f7247e56-08c4-4a7d-9666-b0ccf1a6875d`), published as [v1.2](https://github.com/adamoadamo/decanter/releases/tag/v1.2). It checks for updates at most once a day.
 - Before that: 1.1 (build 2), still called Yeobgamer, in `dist/Yeobgamer-1.1.zip` (submission `fdd63246-bbef-4443-b407-58b442f3b05d`). 1.0 (`8586e538-…`) is still in `dist/`.

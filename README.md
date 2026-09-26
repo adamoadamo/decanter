@@ -1,3 +1,5 @@
+<img src="Resources/AppIcon.png" width="160" alt="Decanter's icon: two bunnies drawn in black outline">
+
 # Decanter
 
 Decanter plays Windows games on a Mac. You add a game's `.exe` and press Play.

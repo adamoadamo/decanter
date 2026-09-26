@@ -446,7 +446,10 @@ final class AppModel {
             notices[game.id] = "Can’t find the game file. Was it moved or deleted?"
             return
         }
-        notices[game.id] = nil
+        // Some games only use WebView2 for an optional web page, so say so rather than refuse.
+        notices[game.id] = Setup.usesWebView2(game.url)
+            ? "This game uses Microsoft Edge WebView2, which doesn’t work in Wine yet. If it asks to install WebView2, it probably can’t run."
+            : nil
         logs[game.id] = ""
         cancelledStarts.remove(game.id)
         starting.insert(game.id)
@@ -672,7 +675,7 @@ final class AppModel {
     /// The setup to try after this one fails, if the game is automatic and hasn't been
     /// through every setup since Play was pressed.
     private func nextSetup(for game: Game) -> Setup? {
-        guard game.automatic else { return nil }
+        guard game.automatic, !Setup.usesWebView2(game.url) else { return nil }
         let setups = Setup.candidates(for: game.url)
         guard setupRetries[game.id, default: 0] < setups.count - 1 else { return nil }
         return setups[(min(game.setupStep, setups.count - 1) + 1) % setups.count]

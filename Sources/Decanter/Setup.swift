@@ -26,6 +26,12 @@ struct Setup: Equatable {
         return graphics.map { Setup(engine: .crossover, graphics: $0) } + [Setup(engine: .wine, graphics: .opengl)]
     }
 
+    /// Games made to run inside Microsoft Edge WebView2, like Construct 3's default Windows
+    /// export. Its installer crashes in Wine, so no setup can run them.
+    static func usesWebView2(_ exe: URL) -> Bool {
+        FileManager.default.fileExists(atPath: exe.deletingLastPathComponent().appendingPathComponent("WebView2Loader.dll").path)
+    }
+
     /// The Unity version a game was made with, like "2021.3.11f1", read from the start of
     /// the files in its _Data folder. Nil for games not made with Unity.
     static func unityVersion(of exe: URL) -> String? {

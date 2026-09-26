@@ -102,12 +102,11 @@ enum Engine: String, Codable, CaseIterable, Identifiable {
 /// How a game on the CrossOver engine draws with Direct3D 10 and 11. Direct3D 8 and 9
 /// always go through Wine's own Direct3D on OpenGL.
 enum Graphics: String, Codable, CaseIterable, Identifiable {
-    /// Wine's own Direct3D on OpenGL. It stops at feature level 10.1, but in testing it ran
-    /// every Unity, GameMaker, MonoGame and Ren'Py game tried.
+    /// Wine's own Direct3D on OpenGL, the same path Direct3D 8/9 games take. It stops at
+    /// feature level 10.1, which ran every Unity 5–2021, GameMaker, MonoGame and Ren'Py game tried.
     case opengl
     /// DXVK turns Direct3D into Vulkan, which MoltenVK runs on Metal. It offers feature
-    /// level 11, which some newer Unity games need, but it showed a black screen for several
-    /// games that run fine on OpenGL, including Ren'Py (which draws through ANGLE).
+    /// level 11, which some Unity 6 games need, and ran most of the other games tried too.
     case dxvk
 
     static let `default` = Graphics.opengl

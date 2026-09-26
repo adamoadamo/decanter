@@ -23,6 +23,9 @@ Decanter is made for indie games. These kinds of games have been tested and work
 - Godot games, versions 3 and 4
 - GameMaker games, from GameMaker 8 to today's GameMaker
 - Ren'Py visual novels
+- RPG Maker MV games
+- LÖVE games
+- Clickteam Fusion games
 - MonoGame games
 - other games built on SDL, such as small C# engines
 
@@ -32,6 +35,7 @@ Games that usually won't work:
 
 - games with anti-cheat
 - games that need Steam or another launcher running
+- newer Construct games that ask to install Microsoft Edge WebView2
 - big 3D games that need DirectX 12
 
 ## When a game doesn't work

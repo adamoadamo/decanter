@@ -2,8 +2,6 @@
 
 A small Mac app for playing simple Windows indie games. Drop in a game's `.exe` and press Play. It runs the game with [Wine](https://www.winehq.org), which Decanter downloads and manages itself.
 
-Decanter was called Yeobgamer up to version 1.1. Updating moves its library, engines and saves across automatically.
-
 ## Using it
 
 1. **First launch:** click **Download Wine** (about 260 MB, one time). On Apple Silicon, Wine also needs Rosetta 2, and the app offers to install it if it's missing.

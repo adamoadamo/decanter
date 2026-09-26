@@ -1,0 +1,13 @@
+# Build output
+.build/
+build/
+dist/
+
+# Test games are third-party and must never be committed
+lisa/
+
+.DS_Store
+.swiftpm/
+
+# Personal editor settings
+.vscode/

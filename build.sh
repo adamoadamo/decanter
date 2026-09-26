@@ -43,11 +43,12 @@ if [ $RELEASE = 1 ]; then
     fi
 fi
 
-if [ ! -f Resources/AppIcon.icns ]; then
+# The app icon is made from the artwork in Resources/AppIcon.png whenever that changes.
+if [ ! -f Resources/AppIcon.icns ] || [ Resources/AppIcon.png -nt Resources/AppIcon.icns ]; then
     echo "Making app icon…"
     ICONSET="$(mktemp -d)/AppIcon.iconset"
     mkdir -p "$ICONSET"
-    swift scripts/make-icon.swift "$ICONSET/icon_512x512@2x.png"
+    swift scripts/make-icon.swift Resources/AppIcon.png "$ICONSET/icon_512x512@2x.png"
     for s in 16 32 128 256 512; do
         sips -z $s $s "$ICONSET/icon_512x512@2x.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
         sips -z $((s * 2)) $((s * 2)) "$ICONSET/icon_512x512@2x.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null

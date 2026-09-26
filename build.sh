@@ -123,5 +123,5 @@ if [ $RELEASE = 1 ]; then
     git push origin HEAD
     gh release create "v$VERSION" "$OUT" --repo "$REPO" --target "$(git rev-parse HEAD)" \
         --title "Decanter $VERSION" --notes-file "$NOTES"
-    echo "Released. Copies of Decanter will offer it the next time they open (checked once a day)."
+    echo "Released. Copies of Decanter will offer it the next time they open."
 fi

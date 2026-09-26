@@ -16,8 +16,8 @@ The only secrets are the private key and the notary password, and both stay in t
 
 ## Current state
 
-- Next release: 1.2 (build 3), the first under the name Decanter. Not notarised yet. Its notes are in `release-notes/1.2.md`.
-- Latest notarised build: 1.1 (build 2), still called Yeobgamer: `dist/Yeobgamer-1.1.zip`, notarised 25 Sep 2026. Apple accepted submission `fdd63246-bbef-4443-b407-58b442f3b05d`. 1.0 (`8586e538-…`) is still in `dist/`.
+- Latest release: 1.2 (build 3), the first under the name Decanter. Notarised 26 Sep 2026 (Apple submission `f7247e56-08c4-4a7d-9666-b0ccf1a6875d`) and published as [v1.2](https://github.com/adamoadamo/decanter/releases/tag/v1.2) with `dist/Decanter-1.2.zip`. The next release needs a new version number.
+- Before that: 1.1 (build 2), still called Yeobgamer, in `dist/Yeobgamer-1.1.zip` (submission `fdd63246-bbef-4443-b407-58b442f3b05d`). 1.0 (`8586e538-…`) is still in `dist/`.
 - 1.1 has no update check, so testers on 1.1 need 1.2 sent to them once. From 1.2 on, Decanter tells them about new releases itself.
 - Checked in the notarised 1.1: the CrossOver engine's libraries (FreeType, MoltenVK) load in the game process, so hardened runtime doesn't block the `DYLD_FALLBACK_LIBRARY_PATH` passed to Wine. Gatekeeper accepted it (`source=Notarized Developer ID`), the ticket was stapled, and it's signed with hardened runtime, a secure timestamp and no entitlements.
 

@@ -1,64 +1,88 @@
 # Decanter
 
-A small Mac app for playing simple Windows indie games. Drop in a game's `.exe` and press Play. It runs the game with [Wine](https://www.winehq.org), which Decanter downloads and manages itself.
+Decanter plays Windows games on a Mac. You add a game's `.exe` and press Play.
 
-## Using it
+It uses [Wine](https://www.winehq.org) to run the games. Decanter downloads Wine and sets it up for you, so you don't need to know anything about it.
 
-1. **First launch:** click **Download Wine** (about 260 MB, one time). On Apple Silicon, Wine also needs Rosetta 2, and the app offers to install it if it's missing.
-2. **Add a game:** drag its `.exe` onto the window, press **+**, or right-click the `.exe` in Finder → Open With → Decanter.
-3. **Installers:** if you add a `setup.exe` or `.msi`, Decanter runs it and then asks which installed `.exe` to add.
-4. **Play.** The first launch spends about a minute setting up the Windows environment.
-5. **Quit:** press **⌘Q** while playing to quit the game. ⌘Q in Decanter quits Decanter and any running games. Game → Stop (⌘.) stops the selected game.
+## Getting started
 
-Per-game options:
+1. Open Decanter and click **Download Wine**. It's about 260 MB and you only do it once. On a Mac with Apple Silicon, Decanter also asks to install Rosetta 2 if you don't have it.
+2. Add a game. Drag its `.exe` onto the window, click **+**, or right-click the `.exe` in Finder and choose Open With → Decanter.
+3. Press **Play**. The first time takes about a minute while Decanter gets things ready.
+4. To quit a game, press **⌘Q** while you're playing it. Quitting Decanter quits any games that are still running too.
 
-- **Wine engine:** see below.
-- **Run inside a window:** a Wine virtual desktop, for games that change the screen resolution.
-- **Launch options:** command-line arguments to pass to the game.
-- **Log:** Wine's output while the game runs.
+If a game comes as an installer (`setup.exe` or a `.msi` file), add that instead. Decanter runs the installer, then asks which game to add.
 
-If a game ships runtime installers next to its `.exe` (`oalinst.exe` for OpenAL, `vcredist*.exe` for Visual C++), Decanter installs them silently the first time you press Play.
+Some games come with extra installers for sound or for Microsoft's Visual C++, sitting next to the game. Decanter runs those for you the first time you play.
 
-**Settings (⌘,)** has Wine configuration, the C: drive in Finder, force quit, reset, and a way to pick a different Wine.
+## Which games work
 
-## Engines
+Decanter is made for indie games. These kinds of games have been tested and work, with sound, keyboard and mouse:
 
-Each game runs with one of two Wine builds. Pick one per game under Options. Each engine has its own Windows environment, so installing something in one doesn't affect the other.
+- Unity games, from old ones to Unity 6
+- Godot games, versions 3 and 4
+- GameMaker games, from GameMaker 8 to today's GameMaker
+- Ren'Py visual novels
+- MonoGame games
+- other games built on SDL, such as small C# engines
 
-- **CrossOver 24** (default): CodeWeavers' CrossOver Wine, built by the [Sikarugir](https://github.com/Sikarugir-App) project, plus the support libraries (fonts, sound, controllers) from Sikarugir's wrapper template. Best for older 32-bit games on Apple Silicon.
-- **Wine Staging**: the newest upstream Wine ([Gcenx's builds](https://github.com/Gcenx/macOS_Wine_builds)). It downloads the first time a game that uses it is played.
+Old 32-bit Unity games can take half a minute or more to load. Give them time.
 
-If a game crashes inside Wine, Decanter stops it and suggests trying the other engine.
+Games that usually won't work:
 
-## What works
+- games with anti-cheat
+- games that need Steam or another launcher running
+- big 3D games that need DirectX 12
 
-Simple 2D and older DirectX 8/9 games, Unity, GameMaker, and RPG Maker games usually have the best chance. Anti-cheat, DRM-heavy, and demanding DirectX 11/12 games generally won't run.
+## When a game doesn't work
 
-LISA (GameMaker 8, 32-bit) is an example of why there are two engines. On Apple Silicon it crashes at startup under every upstream Wine 11 build tried (Staging and Devel 11.18, Stable 11.0), inside Wine's 32-to-64-bit layer under Rosetta. On CrossOver 24 it runs with graphics and sound.
+Decanter decides how to run each game by itself. If a game closes or crashes as it starts, Decanter tries another way and remembers the one that works.
 
-## Where things live
+You can also choose yourself, under the game's Options:
 
-`~/Library/Application Support/Decanter/`:
+- **Wine engine.** Decanter has two versions of Wine.
+- **Graphics.** Two ways of drawing games made with DirectX 10 or 11, which includes most Unity games. If a game shows a black screen or looks wrong, try the other one.
+- **Run inside a window.** For games that open at the wrong size or change your screen resolution.
+- **Launch options.** Extra settings to start the game with, if the game's instructions mention any.
 
-- `Engines/CrossOver/`: the CrossOver 24 engine and its support libraries
-- `Prefix-CrossOver/`: CrossOver's Windows environment, including the C: drive and any saves games put there
-- `Wine/` and `Prefix/`: the same for Wine Staging
-- `Icons/`: icons pulled from each game's `.exe`
-- `library.json`: your game list
+Choosing the engine or graphics yourself turns off **Choose automatically** for that game. Turn it back on to let Decanter decide again.
 
-## Building
+**Log**, under the options, shows what Wine printed while the game ran. Click it to open it, and copy it if you're asking someone for help.
 
-Needs the Xcode Command Line Tools (Swift 5.9+) on macOS 14 or later.
+The Settings window (⌘,) has Wine's own settings, a way to see the game's C: drive in Finder, and a button to force-quit everything.
+
+## Updates
+
+Decanter checks for a new version when you open it, once a day, and tells you when there is one. To check straight away, choose Decanter → Check for Updates….
+
+## Where Decanter keeps things
+
+Everything is in `~/Library/Application Support/Decanter/`:
+
+- `library.json`: your list of games
+- `Engines/` and `Wine/`: the two versions of Wine
+- `Prefix-CrossOver/` and `Prefix/`: a Windows C: drive for each version of Wine, including any saves games keep there
+- `Icons/`: icons taken from each game
+
+## For developers
+
+You need the Xcode Command Line Tools (Swift 5.9 or later) on macOS 14 or later.
 
 ```
-./build.sh              # quick ad-hoc build → build/Decanter.app
-./build.sh --notarise   # Developer ID signed + notarised → dist/  (see RELEASING.md)
+./build.sh              # quick build for this Mac → build/Decanter.app
+./build.sh --notarise   # signed and notarised → dist/
+./build.sh --release    # notarised, then published as a GitHub release
 ```
 
-Code is in `Sources/Decanter/`:
+[RELEASING.md](RELEASING.md) explains signing, notarising and publishing updates.
+
+The code is in `Sources/Decanter/`:
 
 - `Wine.swift`: finding, downloading and running Wine
-- `AppModel.swift`: the library, launching, installers
-- `PEIcon.swift`: reads icons out of `.exe` files
-- `Views.swift`: the SwiftUI interface
-- `Updates.swift`: checks GitHub releases for a newer version
+- `AppModel.swift`: the game library, launching games, installers
+- `Views.swift`: the windows and buttons
+- `Setup.swift`: choosing the engine and graphics for each game
+- `Updates.swift`: checking for new versions
+- `PEIcon.swift`: reading icons out of `.exe` files
+
+The two versions of Wine are CrossOver 24, built by the [Sikarugir](https://github.com/Sikarugir-App) project (the default), and Wine Staging, from [Gcenx's builds](https://github.com/Gcenx/macOS_Wine_builds).

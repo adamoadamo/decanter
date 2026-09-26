@@ -5,6 +5,7 @@ dist/
 
 # Test games are third-party and must never be committed
 lisa/
+test-games/
 
 .DS_Store
 .swiftpm/

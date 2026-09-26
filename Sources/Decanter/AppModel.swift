@@ -634,7 +634,7 @@ final class AppModel {
         runningWine[id] = nil
         updateQuitHotKey()
         let stoppedByUser = stopping.remove(id) != nil
-        let failedToStart = retryOnExit.remove(id) != nil || (!stoppedByUser && status != 0 && ran < Self.startupWindow)
+        let failedToStart = retryOnExit.remove(id) != nil || (!stoppedByUser && status != 0 && ran < Self.quickExit)
         if failedToStart, let game = game(id), game.automatic {
             if let next = nextSetup(for: game) {
                 if notices[id] == nil {
@@ -655,9 +655,11 @@ final class AppModel {
 
     // MARK: Automatic setup
 
-    /// A crash or non-zero exit this soon after starting counts as the setup not working.
-    /// Some games take most of a minute to fail, e.g. Unity 6 without feature level 11.
+    /// A crash this soon after starting counts as the setup not working.
     private static let startupWindow: TimeInterval = 60
+    /// So does exiting with an error this soon: any later could be a game that returns an
+    /// error code when quit normally.
+    private static let quickExit: TimeInterval = 20
 
     /// Points an automatic game at the setup it's up to.
     private func applySetup(to id: UUID) {

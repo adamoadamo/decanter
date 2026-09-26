@@ -57,7 +57,7 @@ struct AppCommands: Commands {
                 .disabled(model.needsSetup)
         }
         CommandMenu("Game") {
-            Button("Play") { model.game(model.selection).map(model.play) }
+            Button("Play") { model.game(model.selection).map { model.play($0) } }
                 .keyboardShortcut("r")
                 .disabled(model.needsSetup || model.selection == nil)
             Button("Stop") { model.game(model.selection).map(model.stop) }

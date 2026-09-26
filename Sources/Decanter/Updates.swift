@@ -22,12 +22,16 @@ enum Updates {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     }
 
-    static func latest() async throws -> Release {
+    /// The newest published release, or nil if there isn't one yet (GitHub answers 404).
+    static func latest() async throws -> Release? {
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-        return try JSONDecoder().decode(Release.self, from: data)
+        switch (response as? HTTPURLResponse)?.statusCode {
+        case 200: return try JSONDecoder().decode(Release.self, from: data)
+        case 404: return nil
+        default: throw URLError(.badServerResponse)
+        }
     }
 
     /// Compares dotted versions number by number, so 1.10 is newer than 1.9 and 1.2 equals 1.2.0.

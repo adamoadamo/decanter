@@ -7,6 +7,12 @@ struct Game: Identifiable, Codable, Hashable {
     var name: String
     var exePath: String
     var engine = Engine.default
+    var graphics = Graphics.default
+    /// Decanter picks the engine and graphics (see Setup.candidates), and moves on to the next
+    /// setup when the game closes or crashes as it starts. Picking either by hand turns it off.
+    var automatic = true
+    /// How far down Setup.candidates an automatic game has had to go.
+    var setupStep = 0
     var arguments = ""
     var virtualDesktop = false
     var desktopSize = "1280x720"
@@ -33,6 +39,12 @@ struct Game: Identifiable, Codable, Hashable {
             // saves and settings, which live in that engine's Windows environment.
             engine = .wine
         }
+        graphics = (try? c.decodeIfPresent(Graphics.self, forKey: .graphics)) ?? .default
+        // Before 1.2 the engine was only ever Wine Staging because 1.0 had nothing else or
+        // because the player picked it, so leave those as they are.
+        automatic = try c.decodeIfPresent(Bool.self, forKey: .automatic)
+            ?? (engine == .crossover || Engine.owning(exePath) != nil)
+        setupStep = try c.decodeIfPresent(Int.self, forKey: .setupStep) ?? 0
         arguments = try c.decodeIfPresent(String.self, forKey: .arguments) ?? ""
         virtualDesktop = try c.decodeIfPresent(Bool.self, forKey: .virtualDesktop) ?? false
         desktopSize = try c.decodeIfPresent(String.self, forKey: .desktopSize) ?? "1280x720"
@@ -89,6 +101,11 @@ final class AppModel {
     var update: Updates.Release?
 
     @ObservationIgnored private var runningWine: [UUID: WineBinary] = [:]
+    @ObservationIgnored private var launchedAt: [UUID: Date] = [:]
+    /// Setups tried by itself since the player last pressed Play, per game.
+    @ObservationIgnored private var setupRetries: [UUID: Int] = [:]
+    /// Games stopped after crashing as they started, to relaunch with the next setup.
+    @ObservationIgnored private var retryOnExit: Set<UUID> = []
     @ObservationIgnored private var stopping: Set<UUID> = []
     @ObservationIgnored private var cancelledStarts: Set<UUID> = []
     @ObservationIgnored private var iconCache: [UUID: NSImage] = [:]
@@ -123,7 +140,7 @@ final class AppModel {
             do {
                 let release = try await Updates.latest()
                 defaults.set(Date(), forKey: "lastUpdateCheck")
-                if Updates.isNewer(release.version, than: Updates.currentVersion),
+                if let release, Updates.isNewer(release.version, than: Updates.currentVersion),
                    userInitiated || defaults.string(forKey: "skippedVersion") != release.version {
                     update = release
                 } else if userInitiated {
@@ -187,8 +204,9 @@ final class AppModel {
             try? ico.write(to: AppPaths.icon(for: game.id))
         }
         games.append(game)
+        applySetup(to: game.id)
         selection = game.id
-        return game
+        return self.game(game.id) ?? game
     }
 
     func remove(_ game: Game) {
@@ -412,8 +430,12 @@ final class AppModel {
 
     // MARK: Playing
 
-    func play(_ game: Game) {
+    /// `retry` is Decanter trying the next setup by itself, rather than the player pressing Play.
+    func play(_ game: Game, retry: Bool = false) {
         guard running[game.id] == nil, !starting.contains(game.id) else { return }
+        if !retry { setupRetries[game.id] = 0 }
+        applySetup(to: game.id)
+        guard let game = self.game(game.id) else { return }
         // Rosetta may have been installed from Settings since the last check.
         if rosettaMissing { rosettaMissing = !WineLocator.rosettaAvailable }
         guard !rosettaMissing else {
@@ -433,11 +455,13 @@ final class AppModel {
             do {
                 let wine = try await prepare(game.engine)
                 await installBundledRuntimes(for: game, with: wine)
+                if game.graphics == .dxvk { await Wine.installDXVK(wine) }
                 // Cancelled, removed, force-quit or reset while getting ready.
                 guard cancelledStarts.remove(game.id) == nil, let current = self.game(game.id) else { return }
                 // Launch options may have changed while it was getting ready.
                 running[game.id] = try launch(current, with: wine)
                 runningWine[game.id] = wine
+                launchedAt[game.id] = Date()
                 updateQuitHotKey()
                 if let i = games.firstIndex(where: { $0.id == game.id }) { games[i].lastPlayed = Date() }
             } catch {
@@ -452,7 +476,7 @@ final class AppModel {
         ("Visual C++ runtime", { $0.hasPrefix("vcredist") || $0.hasPrefix("vc_redist") }, ["/q", "/norestart"]),
     ]
 
-    /// Silently installs any bundled runtimes (e.g. LISA's oalinst.exe) the first time
+    /// Silently installs any bundled runtimes (e.g. oalinst.exe for OpenAL) the first time
     /// they're seen. Remembered inside the prefix, so resetting it starts fresh.
     private func installBundledRuntimes(for game: Game, with wine: WineBinary) async {
         let record = wine.prefix.appendingPathComponent("decanter-runtimes.txt")
@@ -512,7 +536,7 @@ final class AppModel {
         args += splitArguments(game.arguments)
 
         // Run from the game's folder: most games load their files relative to it.
-        let process = Wine.process(wine, args, cwd: exe.deletingLastPathComponent())
+        let process = Wine.process(wine, args, cwd: exe.deletingLastPathComponent(), graphics: game.graphics)
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -551,16 +575,35 @@ final class AppModel {
     /// it just sits there looking like it's running. Stop it and say what happened.
     private func noticeCrash(_ id: UUID, in text: String) {
         guard running[id] != nil, !stopping.contains(id), let game = game(id) else { return }
-        // A game installed with Run Installer has to stay in the engine it was installed in.
-        let other = Engine.owning(game.exePath) == nil ? Engine.allCases.first { $0 != game.engine } : nil
+        let crashed = ["Unhandled exception", "Unhandled page fault", "virtual_setup_exception stack overflow",
+                       "nested exception on signal stack"].contains { text.contains($0) }
+        if crashed, startedRecently(id), let next = nextSetup(for: game) {
+            retryOnExit.insert(id)
+            notices[id] = "The game crashed with \(Setup(engine: game.engine, graphics: game.graphics).title), so Decanter is trying \(next.title)…"
+            stop(game)
+            return
+        }
         if text.contains("virtual_setup_exception stack overflow") || text.contains("nested exception on signal stack") {
             stop(game)
             notices[id] = "The game crashed inside \(game.engine.title) and was stopped."
-                + (other.map { " Try switching this game’s Wine engine to \($0.title) under Options." } ?? "")
+                + (nextStep(for: game).map { " Try \($0)." } ?? "")
                 + " The log below has details."
         } else if text.contains("Unhandled exception") || text.contains("Unhandled page fault") {
             notices[id] = "The game crashed. Close Wine’s error window to return."
-                + (other.map { " If it keeps happening, try the \($0.title) engine under Options." } ?? "")
+                + (nextStep(for: game).map { " If it keeps happening, try \($0)." } ?? "")
+        }
+    }
+
+    /// What to try when a game crashes. DXVK first for a CrossOver game on OpenGL: Wine Staging
+    /// can't run Direct3D 10/11 games on Apple Silicon at all. A game installed with Run
+    /// Installer has to stay in the engine it was installed in.
+    private func nextStep(for game: Game) -> String? {
+        let other = Engine.owning(game.exePath) == nil ? Engine.allCases.first { $0 != game.engine } : nil
+        switch (game.engine == .crossover && game.graphics == .opengl, other) {
+        case (true, let other?): return "setting Graphics to DXVK, or the \(other.title) engine, under Options"
+        case (true, nil): return "setting Graphics to DXVK under Options"
+        case (false, let other?): return "the \(other.title) engine under Options"
+        case (false, nil): return nil
         }
     }
 
@@ -581,12 +624,83 @@ final class AppModel {
     private func gameExited(_ id: UUID, _ process: Process, status: Int32, after seconds: TimeInterval) {
         // Already handled: Stop ends a game whose launcher has exited without waiting for Wine.
         guard running[id] === process else { return }
+        let wine = runningWine[id]
+        // How long the game itself ran, which for a game with a launcher is longer than `seconds`.
+        let ran = launchedAt.removeValue(forKey: id).map { Date().timeIntervalSince($0) } ?? seconds
         running[id] = nil
         runningWine[id] = nil
         updateQuitHotKey()
         let stoppedByUser = stopping.remove(id) != nil
+        let failedToStart = retryOnExit.remove(id) != nil || (!stoppedByUser && status != 0 && ran < Self.startupWindow)
+        if failedToStart, let game = game(id), game.automatic {
+            if let next = nextSetup(for: game) {
+                if notices[id] == nil {
+                    notices[id] = "The game closed as it started with \(Setup(engine: game.engine, graphics: game.graphics).title), so Decanter is trying \(next.title)…"
+                }
+                trySetup(next, for: id, after: wine)
+            } else {
+                notices[id] = "The game closed as it started with every setup Decanter has. The log below may explain why."
+            }
+            return
+        }
         if !stoppedByUser, status != 0, seconds < 15, notices[id] == nil {
-            notices[id] = "The game closed right away (exit code \(status)). The log below may explain why."
+            notices[id] = "The game closed right away (exit code \(status))."
+                + (game(id).flatMap(nextStep).map { " If it keeps happening, try \($0)." } ?? "")
+                + " The log below may explain why."
+        }
+    }
+
+    // MARK: Automatic setup
+
+    /// A crash or non-zero exit this soon after starting counts as the setup not working.
+    /// Some games take most of a minute to fail, e.g. Unity 6 without feature level 11.
+    private static let startupWindow: TimeInterval = 60
+
+    /// Points an automatic game at the setup it's up to.
+    private func applySetup(to id: UUID) {
+        guard let i = games.firstIndex(where: { $0.id == id }), games[i].automatic else { return }
+        let setups = Setup.candidates(for: games[i].url)
+        let setup = setups[min(games[i].setupStep, setups.count - 1)]
+        if games[i].engine != setup.engine { games[i].engine = setup.engine }
+        if games[i].graphics != setup.graphics { games[i].graphics = setup.graphics }
+    }
+
+    private func startedRecently(_ id: UUID) -> Bool {
+        launchedAt[id].map { Date().timeIntervalSince($0) < Self.startupWindow } ?? false
+    }
+
+    /// The setup to try after this one fails, if the game is automatic and hasn't been
+    /// through every setup since Play was pressed.
+    private func nextSetup(for game: Game) -> Setup? {
+        guard game.automatic else { return nil }
+        let setups = Setup.candidates(for: game.url)
+        guard setupRetries[game.id, default: 0] < setups.count - 1 else { return nil }
+        return setups[(min(game.setupStep, setups.count - 1) + 1) % setups.count]
+    }
+
+    private func trySetup(_ setup: Setup, for id: UUID, after wine: WineBinary?) {
+        guard let i = games.firstIndex(where: { $0.id == id }) else { return }
+        let setups = Setup.candidates(for: games[i].url)
+        games[i].setupStep = setups.firstIndex(of: setup) ?? 0
+        setupRetries[id, default: 0] += 1
+        Task {
+            // Let the old Wine finish closing, or the next start can't open a window.
+            if let wine, !engineBusy(wine.engine, besides: id) {
+                _ = try? await Shell.run(wine.wineserver, ["-w"], environment: Wine.environment(for: wine))
+            }
+            let notice = notices[id]
+            if let game = game(id) { play(game, retry: true) }
+            if notices[id] == nil { notices[id] = notice }  // play() clears it; keep saying what's going on.
+        }
+    }
+
+    /// Automatic back on starts again from the best setup for the game.
+    func setAutomatic(_ on: Bool, for id: UUID) {
+        guard let i = games.firstIndex(where: { $0.id == id }) else { return }
+        games[i].automatic = on
+        if on {
+            games[i].setupStep = 0
+            applySetup(to: id)
         }
     }
 

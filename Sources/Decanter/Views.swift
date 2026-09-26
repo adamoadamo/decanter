@@ -157,6 +157,7 @@ struct GameDetailView: View {
     @Environment(AppModel.self) private var model
     let gameID: UUID
     @State private var confirmRemove = false
+    @State private var showLog = false
 
     private static let sizes = ["800x600", "1024x768", "1280x720", "1280x800", "1600x900", "1920x1080"]
 
@@ -169,6 +170,7 @@ struct GameDetailView: View {
                         GameIcon(game: game, size: 80)
                         VStack(alignment: .leading, spacing: 6) {
                             TextField("Name", text: binding.name)
+                                .labelsHidden()  // A Form otherwise shows "Name" beside the title.
                                 .textFieldStyle(.plain)
                                 .font(.title.bold())
                             Button {
@@ -210,26 +212,33 @@ struct GameDetailView: View {
                 }
 
                 Section("Options") {
-                    Picker(selection: binding.engine) {
-                        ForEach(Engine.allCases) { engine in
-                            Text(engine == .default ? "\(engine.title) (recommended)" : engine.title).tag(engine)
-                        }
+                    let busy = model.running[gameID] != nil || model.starting.contains(gameID)
+                    // Picks the engine and graphics, and tries another setup if the game closes as it starts.
+                    Toggle("Choose automatically", isOn: Binding(get: { game.automatic }, set: { model.setAutomatic($0, for: gameID) }))
+                    .disabled(busy)
+                    // Picking either by hand turns automatic off.
+                    Picker(selection: Binding(get: { game.engine }, set: {
+                        binding.wrappedValue.engine = $0
+                        binding.wrappedValue.automatic = false
+                    })) {
+                        ForEach(Engine.allCases) { Text($0.title).tag($0) }
                     } label: {
                         Text("Wine engine")
-                        if Engine.owning(game.exePath) != nil {
-                            Text("Installed with Run Installer, so it stays in this engine’s Windows environment.")
-                        } else {
-                            Text(model.engines[game.engine] == nil
-                                 ? "\(game.engine.summary) Downloads when you press Play (\(game.engine.downloadSize))."
-                                 : game.engine.summary)
+                    }
+                    // A game installed with Run Installer stays in the engine it was installed in.
+                    .disabled(busy || Engine.owning(game.exePath) != nil)
+                    if game.engine == .crossover {
+                        Picker(selection: Binding(get: { game.graphics }, set: {
+                            binding.wrappedValue.graphics = $0
+                            binding.wrappedValue.automatic = false
+                        })) {
+                            ForEach(Graphics.allCases) { Text($0.title).tag($0) }
+                        } label: {
+                            Text("Graphics")  // Direct3D 10/11 only.
                         }
+                        .disabled(busy)
                     }
-                    .disabled(model.running[gameID] != nil || model.starting.contains(gameID)
-                              || Engine.owning(game.exePath) != nil)
-                    Toggle(isOn: binding.virtualDesktop) {
-                        Text("Run inside a window")
-                        Text("Good for games that change your screen resolution or open at the wrong size.")
-                    }
+                    Toggle("Run inside a window", isOn: binding.virtualDesktop)
                     if game.virtualDesktop {
                         Picker("Window size", selection: binding.desktopSize) {
                             ForEach(Self.sizes, id: \.self) { Text($0.replacingOccurrences(of: "x", with: " × ")) }
@@ -239,29 +248,30 @@ struct GameDetailView: View {
                 }
 
                 Section {
-                    // Always visible: a collapsed log was easy to miss and hard to open.
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            Text(log.isEmpty ? "Nothing yet. Wine’s output appears here when you play." : String(log.suffix(20_000)))
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(log.isEmpty ? .secondary : .primary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Color.clear.frame(height: 1).id("end")
+                    DisclosureGroup(isExpanded: $showLog) {
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                Text(log.isEmpty ? "Nothing yet. Wine’s output appears here when you play." : String(log.suffix(20_000)))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(log.isEmpty ? .secondary : .primary)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Color.clear.frame(height: 1).id("end")
+                            }
+                            .frame(height: 200)
+                            .onChange(of: log) { proxy.scrollTo("end", anchor: .bottom) }
+                            .onAppear { proxy.scrollTo("end", anchor: .bottom) }
                         }
-                        .frame(height: 200)
-                        .onChange(of: log) { proxy.scrollTo("end", anchor: .bottom) }
-                        .onAppear { proxy.scrollTo("end", anchor: .bottom) }
-                    }
-                } header: {
-                    HStack {
-                        Text("Log")
-                        Spacer()
-                        Button("Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(log, forType: .string)
+                    } label: {
+                        HStack {
+                            Text("Log")
+                            Spacer()
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(log, forType: .string)
+                            }
+                            .disabled(log.isEmpty)
                         }
-                        .disabled(log.isEmpty)
                     }
                 }
 

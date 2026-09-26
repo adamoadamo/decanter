@@ -16,7 +16,8 @@ The only secrets are the private key and the notary password, and both stay in t
 
 ## Current state
 
-- Latest release: 1.2.1 (build 4): bigger icon, Check for Updates in About, a check on every launch. Notarised 26 Sep 2026 (submission `a5725f1b-b9fe-4a12-a221-7dd1c302a969`), published as [v1.2.1](https://github.com/adamoadamo/decanter/releases/tag/v1.2.1). The next release needs a new version number.
+- Latest release: 1.2.2 (build 5): the new icon, and a game's name is no longer editable. Notarised 26 Sep 2026 (submission `a83ad9db-cca7-443b-90ed-14f25d8ce7ab`), published as [v1.2.2](https://github.com/adamoadamo/decanter/releases/tag/v1.2.2). The next release needs a new version number.
+- 1.2.1 (build 4): bigger icon, Check for Updates in About, a check on every launch. Submission `a5725f1b-b9fe-4a12-a221-7dd1c302a969`, [v1.2.1](https://github.com/adamoadamo/decanter/releases/tag/v1.2.1).
 - 1.2 (build 3), the first under the name Decanter: notarised 26 Sep 2026 (submission `f7247e56-08c4-4a7d-9666-b0ccf1a6875d`), published as [v1.2](https://github.com/adamoadamo/decanter/releases/tag/v1.2). It checks for updates at most once a day.
 - Before that: 1.1 (build 2), still called Yeobgamer, in `dist/Yeobgamer-1.1.zip` (submission `fdd63246-bbef-4443-b407-58b442f3b05d`). 1.0 (`8586e538-…`) is still in `dist/`.
 - 1.1 has no update check, so testers on 1.1 need 1.2 sent to them once. From 1.2 on, Decanter tells them about new releases itself.

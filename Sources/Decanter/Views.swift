@@ -52,14 +52,22 @@ struct ContentView: View {
         .alert("Decanter \(model.update?.version ?? "") is available",
                isPresented: Binding(get: { model.update != nil }, set: { if !$0 { model.update = nil } }),
                presenting: model.update) { release in
-            Button("Download") { NSWorkspace.shared.open(release.htmlURL) }
+            Button("Install and Relaunch") { model.installUpdate(release) }
             Button("Skip This Version") { model.skip(release) }
             Button("Later", role: .cancel) {}
         } message: { release in
-            Text("You have \(Updates.currentVersion).\n\n\(release.body.map { String($0.prefix(500)) } ?? "")")
+            Text("You have \(Updates.currentVersion). Decanter restarts to finish, and closes any games that are running.\n\n\(release.body.map { String($0.prefix(500)) } ?? "")")
         }
         .overlay(alignment: .bottom) {
-            if model.installerRunning {
+            if case let .installing(release) = model.updateStatus {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Updating to Decanter \(release.version)…")
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.regularMaterial, in: Capsule())
+                .padding()
+            } else if model.installerRunning {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
                     Text("Installer running… finish it in its own window.")
@@ -498,8 +506,13 @@ struct AboutView: View {
             status
                 .font(.callout)
                 .frame(minHeight: 22)
-            Button("Check for Updates") { model.checkForUpdates(userInitiated: true, answerInAbout: true) }
-                .disabled(model.updateStatus == .checking)
+            if case let .available(release) = model.updateStatus {
+                Button("Install Decanter \(release.version)") { model.installUpdate(release) }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button("Check for Updates") { model.checkForUpdates(userInitiated: true, answerInAbout: true) }
+                    .disabled(model.updateStatus == .checking)
+            }
         }
         .padding(28)
         .frame(width: 320)
@@ -519,10 +532,11 @@ struct AboutView: View {
         case .failed:
             Text("Couldn’t check for updates.").foregroundStyle(.secondary)
         case let .available(release):
-            HStack(spacing: 8) {
-                Text("Decanter \(release.version) is out.")
-                Button("Download") { NSWorkspace.shared.open(release.htmlURL) }
-                    .buttonStyle(.link)
+            Text("Decanter \(release.version) is out.")
+        case let .installing(release):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Updating to Decanter \(release.version)…").foregroundStyle(.secondary)
             }
         }
     }

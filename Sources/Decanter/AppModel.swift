@@ -135,6 +135,7 @@ final class AppModel {
     /// skipped. Check for Updates… always answers: from the menu with an alert, from the
     /// About window in place.
     func checkForUpdates(userInitiated: Bool = false, answerInAbout: Bool = false) {
+        if case .installing = updateStatus { return }
         guard updateStatus != .checking else { return }
         updateStatus = .checking
         let alerts = userInitiated && !answerInAbout
@@ -151,6 +152,25 @@ final class AppModel {
             } catch {
                 updateStatus = .failed
                 if alerts { alert = "Couldn’t check for updates. Check your internet connection and try again." }
+            }
+        }
+    }
+
+    /// Puts the release in place of this copy of Decanter and restarts, which quits any
+    /// games that are running. If that can't be done, the release's page opens instead.
+    func installUpdate(_ release: Updates.Release) {
+        if case .installing = updateStatus { return }
+        update = nil
+        updateStatus = .installing(release)
+        Task {
+            do {
+                let installed = try await Updates.install(release)
+                Updates.openWhenQuit(installed)
+                NSApp.terminate(nil)
+            } catch {
+                updateStatus = .available(release)
+                alert = "Couldn’t update Decanter. \(error.localizedDescription) The download page is opening so you can update it yourself."
+                NSWorkspace.shared.open(release.htmlURL)
             }
         }
     }

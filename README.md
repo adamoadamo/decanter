@@ -59,7 +59,7 @@ The Settings window (⌘,) has Wine's own settings, a way to see the game's C: d
 
 ## Updates
 
-Decanter checks for a new version every time you open it, and tells you when there is one. To check straight away, choose Decanter → Check for Updates…, or open About Decanter.
+Decanter checks for a new version every time you open it. When there is one, choose **Install and Relaunch**: Decanter downloads it, makes sure it's a genuine copy, and restarts. If you run Decanter straight from your Downloads folder, the new version goes into your Applications folder. To check straight away, choose Decanter → Check for Updates…, or open About Decanter.
 
 ## Where Decanter keeps things
 

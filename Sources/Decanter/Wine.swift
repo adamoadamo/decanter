@@ -1,11 +1,11 @@
 import Foundation
 
-// Everything that talks to Wine lives here. Foundation-only on purpose, so it
+// Everything that talks to Wine lives here. It only uses Foundation, on purpose, so it
 // stays independent of the UI.
 
 enum AppPaths {
     private static let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    /// Decanter was called Yeobgamer up to 1.1, and kept everything here.
+    /// Decanter was called Yeobgamer up to 1.1, and kept everything in this folder.
     private static let legacy = base.appendingPathComponent("Yeobgamer", isDirectory: true)
 
     /// The first launch after the rename moves the Yeobgamer folder here, with its library,
@@ -27,7 +27,7 @@ enum AppPaths {
         return dir
     }()
 
-    /// A path saved inside the old Yeobgamer folder, pointed at the same file in `support`.
+    /// Turns a path saved inside the old Yeobgamer folder into the same file's path in `support`.
     static func migrated(_ path: String) -> String {
         let old = legacy.path + "/"
         guard support != legacy, path.hasPrefix(old) else { return path }
@@ -43,10 +43,10 @@ enum AppPaths {
 /// The Wine builds Decanter can run games with. Each has its own folder and its own
 /// Windows environment (prefix), since a prefix doesn't move cleanly between Wine versions.
 enum Engine: String, Codable, CaseIterable, Identifiable {
-    /// CodeWeavers' CrossOver 24 Wine, built by the Sikarugir project. Runs 32-bit games on
+    /// CodeWeavers' CrossOver 24 Wine, built by the Sikarugir project. It runs 32-bit games on
     /// Apple Silicon that crash in upstream Wine, such as GameMaker 8 games.
     case crossover
-    /// Upstream Wine Staging (Gcenx's macOS builds): the newest Wine.
+    /// Upstream Wine Staging, from Gcenx's macOS builds. It's the newest Wine.
     case wine
 
     static let `default` = Engine.crossover
@@ -92,8 +92,8 @@ enum Engine: String, Codable, CaseIterable, Identifiable {
 
     var driveC: URL { prefix.appendingPathComponent("drive_c", isDirectory: true) }
 
-    /// The engine whose Windows environment contains this file, e.g. a game that was
-    /// installed with Run Installer. It has to keep running in that engine.
+    /// The engine whose Windows environment contains this file, such as a game that was
+    /// installed with Run Installer. That game has to keep running in that engine.
     static func owning(_ path: String) -> Engine? {
         allCases.first { path.hasPrefix($0.prefix.path + "/") }
     }
@@ -102,11 +102,11 @@ enum Engine: String, Codable, CaseIterable, Identifiable {
 /// How a game on the CrossOver engine draws with Direct3D 10 and 11. Direct3D 8 and 9
 /// always go through Wine's own Direct3D on OpenGL.
 enum Graphics: String, Codable, CaseIterable, Identifiable {
-    /// Wine's own Direct3D on OpenGL, the same path Direct3D 8/9 games take. It stops at
-    /// feature level 10.1, which ran every Unity 5–2021, GameMaker, MonoGame and Ren'Py game tried.
+    /// Wine's own Direct3D on OpenGL, the same path Direct3D 8/9 games take. It stops at feature
+    /// level 10.1, which was enough for every Unity 5–2021, GameMaker, MonoGame and Ren'Py game we tried.
     case opengl
     /// DXVK turns Direct3D into Vulkan, which MoltenVK runs on Metal. It offers feature
-    /// level 11, which some Unity 6 games need, and ran most of the other games tried too.
+    /// level 11, which some Unity 6 games need, and it ran most of the other games we tried too.
     case dxvk
 
     static let `default` = Graphics.opengl
@@ -140,7 +140,7 @@ enum WineError: LocalizedError {
 struct WineBinary: Equatable {
     let engine: Engine
     let wine: URL
-    /// Folder of support libraries (FreeType, SDL, MoltenVK…) the engine loads by name.
+    /// The folder of support libraries (FreeType, SDL, MoltenVK and so on) that the engine loads by name.
     var libraries: URL?
 
     var binDir: URL { wine.deletingLastPathComponent() }
@@ -158,7 +158,7 @@ enum WineLocator {
             guard FileManager.default.isExecutableFile(atPath: wine.path) else { return nil }
             return WineBinary(engine: .crossover, wine: wine, libraries: engine.installDir)
         case .wine:
-            // Custom path first, then Decanter's own copy, then common system installs.
+            // Try the custom path first, then Decanter's own copy, then the usual places Wine gets installed.
             if !customPath.isEmpty, let custom = binary(at: URL(fileURLWithPath: customPath)) {
                 return custom
             }
@@ -232,30 +232,30 @@ enum Wine {
         // Stop Wine from littering ~/Applications and the Desktop with shortcuts.
         env["WINEDLLOVERRIDES"] = "winemenubuilder.exe=d"
         env["PATH"] = wine.binDir.path + ":" + (env["PATH"] ?? "/usr/bin:/bin")
-        // No "Wine configuration is being updated" popup while a prefix is created.
+        // Hide the "Wine configuration is being updated" popup while a prefix is created.
         env["WINEBOOT_HIDE_DIALOG"] = "1"
-        // MoltenVK otherwise prints ~150 lines of GPU info into every game's log.
+        // Otherwise MoltenVK prints about 150 lines of GPU details into every game's log.
         env["MVK_CONFIG_LOG_LEVEL"] = "1"
-        // .NET (XNA/FNA) games misbehave under Rosetta with write-xor-execute on.
+        // .NET games (XNA and FNA) misbehave under Rosetta when write-xor-execute is on.
         env["DOTNET_EnableWriteXorExecute"] = "0"
         if wine.engine == .crossover {
-            // Never CrossOver 24's own choice for Direct3D 10/11, Wine's Vulkan renderer: it
-            // can't make a D3D 10/11 device on MoltenVK, so Unity games crash at startup.
-            // Wine's OpenGL renderer draws Direct3D 8/9 and, with Graphics set to OpenGL, 10/11.
+            // CrossOver 24 would pick Wine's Vulkan renderer for Direct3D 10/11, but that can't
+            // make a Direct3D 10/11 device on MoltenVK, so Unity games crash at startup. Wine's
+            // OpenGL renderer draws Direct3D 8/9 and, when Graphics is set to OpenGL, 10/11 too.
             env["WINE_D3D_CONFIG"] = "renderer=gl"
-            // DXVK's DLLs sit in the Windows environment (see installDXVK); this picks them or Wine's.
+            // DXVK's DLLs sit in the Windows environment (see installDXVK). This chooses between them and Wine's own.
             env["WINEDLLOVERRIDES", default: ""] += ";d3d11,dxgi,d3d10core=" + (graphics == .dxvk ? "n,b" : "b")
             if graphics == .dxvk {
-                env["DXVK_ASYNC"] = "1"  // Compile shaders in the background rather than stutter.
-                env["DXVK_LOG_PATH"] = "none"  // It otherwise writes log files into the game's folder.
+                env["DXVK_ASYNC"] = "1"  // Compile shaders in the background instead of stuttering.
+                env["DXVK_LOG_PATH"] = "none"  // Otherwise it writes log files into the game's folder.
                 env["DXVK_STATE_CACHE_PATH"] = #"C:\decanter\dxvk-cache"#
             }
         }
         if let libraries = wine.libraries {
             // Without these, Wine runs with no fonts, sound, controllers, MP3 or video, and
-            // some installers hang. Mirrors the Sikarugir launcher. Only works because Wine
-            // is launched directly: macOS strips DYLD_* variables when a system binary
-            // (bash, perl…) starts it.
+            // some installers hang. The Sikarugir launcher does the same. It only works because
+            // Wine is launched directly, since macOS strips DYLD_* variables when a system
+            // program such as bash or perl starts it.
             let gstreamer = libraries.appendingPathComponent("GStreamer.framework/Libraries")
             env["DYLD_FALLBACK_LIBRARY_PATH"] = [libraries.path, gstreamer.path, "/usr/lib"].joined(separator: ":")
             env["GST_PLUGIN_PATH"] = gstreamer.appendingPathComponent("gstreamer-1.0").path
@@ -276,8 +276,8 @@ enum Wine {
     /// Copies DXVK from the CrossOver engine's renderer folder into its Windows environment,
     /// where it's only used when Graphics is set to DXVK. Sikarugir builds these DLLs with
     /// Wine's "builtin" marker, which makes Wine load its own d3d11 in their place, so the
-    /// copies have the marker cleared. Runs before each DXVK launch: `wineboot --update`
-    /// puts Wine's files back.
+    /// copies have the marker cleared. This runs before every DXVK launch, because
+    /// `wineboot --update` puts Wine's files back.
     static func installDXVK(_ wine: WineBinary) async {
         guard wine.engine == .crossover, let libraries = wine.libraries else { return }
         await Task.detached {
@@ -299,9 +299,9 @@ enum Wine {
         }.value
     }
 
-    /// Runs Wine and waits for it to exit. Output is discarded: Wine's background
-    /// server inherits the pipes and would keep them open long after. With a timeout,
-    /// a program that's still running afterwards is killed and nil is returned.
+    /// Runs Wine and waits for it to exit. Output is thrown away, because Wine's background
+    /// server inherits the pipes and would keep them open long after. Given a timeout, a
+    /// program that's still running when time is up gets killed, and the result is nil.
     @discardableResult
     static func runAndWait(_ wine: WineBinary, _ arguments: [String], cwd: URL? = nil,
                            timeout: TimeInterval? = nil) async throws -> Int32? {
@@ -324,11 +324,28 @@ enum Wine {
         return timedOut.raised ? nil : status
     }
 
+    /// Waits until nothing is running in this engine's Windows environment, or `timeout`
+    /// seconds, whichever comes first.
+    static func waitUntilIdle(_ wine: WineBinary, timeout: TimeInterval) async {
+        let p = Process()
+        p.executableURL = wine.wineserver
+        p.arguments = ["-w"]
+        p.environment = environment(for: wine)
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        let watchdog = Task {
+            try await Task.sleep(for: .seconds(timeout))
+            if p.isRunning { p.terminate() }
+        }
+        defer { watchdog.cancel() }
+        _ = try? await Shell.wait(for: p)
+    }
+
     static func prefixReady(_ engine: Engine) -> Bool {
         FileManager.default.fileExists(atPath: engine.prefix.appendingPathComponent("system.reg").path)
     }
 
-    /// Creates the Windows environment on first use (takes a minute or so).
+    /// Creates the Windows environment the first time it's needed. This takes a minute or so.
     static func preparePrefix(_ wine: WineBinary) async throws {
         guard !prefixReady(wine.engine) else { return }
         try await runAndWait(wine, ["wineboot", "--init"])
@@ -365,11 +382,6 @@ enum Wine {
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try? p.run()
-    }
-
-    /// "/Users/me/Game.exe" -> "Z:\Users\me\Game.exe" (Wine maps Z: to /).
-    static func windowsPath(_ url: URL) -> String {
-        "Z:" + url.path.replacingOccurrences(of: "/", with: "\\")
     }
 }
 
@@ -423,8 +435,9 @@ func splitArguments(_ text: String) -> [String] {
 // MARK: - Downloading engines
 
 /// Downloads an engine into Decanter's own folder.
-/// - Wine Staging: Gcenx's macOS builds (the same ones the now-disabled Homebrew casks used).
-/// - CrossOver 24: the Sikarugir project's engine, plus the support libraries from its
+/// - Wine Staging comes from Gcenx's macOS builds, the same ones the Homebrew casks used
+///   before they were disabled.
+/// - CrossOver 24 is the Sikarugir project's engine, plus the support libraries from its
 ///   wrapper template, which the engine expects to find beside it.
 final class WineInstaller: NSObject, URLSessionDownloadDelegate {
     enum Step {
@@ -435,13 +448,14 @@ final class WineInstaller: NSObject, URLSessionDownloadDelegate {
 
     private struct Archive {
         let url: URL
-        /// Extract only entries matching this pattern, dropping this many leading path parts.
+        /// If set, only entries matching this pattern are extracted, with this many leading folders
+        /// dropped from their paths.
         var only: (pattern: String, stripComponents: Int)?
     }
 
     private static let stagingAPI = URL(string: "https://api.github.com/repos/Gcenx/macOS_Wine_builds/releases/latest")!
     private static let stagingFallback = URL(string: "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.18/wine-staging-11.18-osx64.tar.xz")!
-    // Pinned: this pair was tested together (a 32-bit GameMaker 8 game runs with sound).
+    // These two are pinned because they were tested together. A 32-bit GameMaker 8 game runs with sound.
     private static let crossoverEngine = URL(string: "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS12WineCX24.0.7_7.tar.xz")!
     private static let crossoverTemplate = URL(string: "https://github.com/Sikarugir-App/Template/releases/download/v1.0/Template-1.0.19.tar.xz")!
 

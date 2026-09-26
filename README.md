@@ -6,16 +6,25 @@ Decanter plays Windows games on a Mac. You add a game's `.exe` and press Play.
 
 It uses [Wine](https://www.winehq.org) to run the games. Decanter downloads Wine and sets it up for you, so you don't need to know anything about it.
 
+<img src="docs/screenshot.png" width="720" alt="Decanter's window, with a library of games in the sidebar and one game's page open, showing its Play button and options">
+
 ## Getting started
 
 1. Open Decanter and click **Download Wine**. It's about 260 MB and you only do it once. On a Mac with Apple Silicon, Decanter also asks to install Rosetta 2 if you don't have it.
 2. Add a game. Drag its `.exe` onto the window, click **+**, or right-click the `.exe` in Finder and choose Open With → Decanter.
-3. Press **Play**. The first time takes about a minute while Decanter gets things ready.
+3. Press **Play**, or double-click the game in the list. The first time takes about a minute while Decanter gets things ready.
 4. To quit a game, press **⌘Q** while you're playing it. Quitting Decanter quits any games that are still running too.
 
 If a game comes as an installer (`setup.exe` or a `.msi` file), add that instead. Decanter runs the installer, then asks which game to add.
 
 Some games come with extra installers for sound or for Microsoft's Visual C++, sitting next to the game. Decanter runs those for you the first time you play.
+
+## Your library
+
+- **Search Games**, at the top of the list, finds a game by name.
+- Right-click a game to play it, rename it, show it in Finder or remove it. The folder button next to Play also shows the game in Finder.
+- Removing a game only takes it off the list. Its files stay where they are. You can also select a game and press Delete.
+- If you move a game's folder, its page says Decanter can't find it. Click **Locate…** and choose the game's `.exe` in its new place. Its settings come with it.
 
 ## Which games work
 
@@ -42,14 +51,13 @@ Games that usually won't work:
 
 ## When a game doesn't work
 
-Decanter decides how to run each game by itself. If a game closes or crashes as it starts, Decanter tries another way and remembers the one that works.
+Decanter decides how to run each game by itself. Before a game starts, Decanter looks at what it was made with, such as Unity or Godot, and picks the setup that suits it. The game's page shows what it found. If a game closes or crashes as it starts, Decanter tries another way and remembers the one that works.
 
 You can also choose yourself, under the game's Options:
 
 - **Wine engine.** Decanter has two versions of Wine.
 - **Graphics.** Two ways of drawing games made with DirectX 10 or 11, which includes most Unity games. If a game shows a black screen or looks wrong, try the other one.
-- **Run inside a window.** For games that open at the wrong size or change your screen resolution.
-- **Launch options.** Extra settings to start the game with, if the game's instructions mention any.
+- **Display.** Opens the game full screen or in a window. This works for games made with Unity, Godot or Unreal Engine. Other games decide for themselves, so look in the game's own settings.
 
 Choosing the engine or graphics yourself turns off **Choose automatically** for that game. Turn it back on to let Decanter decide again.
 
@@ -87,7 +95,7 @@ The code is in `Sources/Decanter/`:
 - `Wine.swift`: finding, downloading and running Wine
 - `AppModel.swift`: the game library, launching games, installers
 - `Views.swift`: the windows and buttons
-- `Setup.swift`: choosing the engine and graphics for each game
+- `Setup.swift`: working out what each game was made with, and choosing its engine and graphics
 - `Updates.swift`: checking for new versions
 - `PEIcon.swift`: reading icons out of `.exe` files
 

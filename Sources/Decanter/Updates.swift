@@ -3,7 +3,7 @@ import Security
 
 /// New versions are published as GitHub releases, tagged like "v1.2", with the notarised
 /// zip attached. Decanter compares the latest one with its own version, and can download
-/// it and put it in its own place.
+/// it and install it in place of itself.
 enum Updates {
     static let repo = "adamoadamo/decanter"
 
@@ -11,6 +11,11 @@ enum Updates {
         case unknown, checking, upToDate, failed
         case available(Release)
         case installing(Release)
+
+        var isInstalling: Bool {
+            if case .installing = self { return true }
+            return false
+        }
     }
 
     struct Release: Decodable, Identifiable, Equatable {
@@ -30,7 +35,7 @@ enum Updates {
 
         var id: String { tagName }
         var version: String { tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV")) }
-        /// The notarised app, zipped.
+        /// Where to download the notarised app, as a zip.
         var zip: URL? { assets.first { $0.name.hasSuffix(".zip") }?.url }
 
         enum CodingKeys: String, CodingKey {
@@ -39,13 +44,15 @@ enum Updates {
     }
 
     enum InstallError: LocalizedError {
-        case noDownload, notReplaceable, notDecanter, notSigned
+        case noDownload, downloadFailed, notReplaceable, notDecanter, notNewer, notSigned
 
         var errorDescription: String? {
             switch self {
             case .noDownload: "The new version has nothing to download yet."
+            case .downloadFailed: "The download didn’t work. Check your internet connection."
             case .notReplaceable: "Decanter can’t put the new version where it is or in Applications."
             case .notDecanter: "The download isn’t a copy of Decanter."
+            case .notNewer: "The download isn’t newer than this copy of Decanter."
             case .notSigned: "The download isn’t signed by Decanter’s developer."
             }
         }
@@ -59,9 +66,9 @@ enum Updates {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
 
-    /// Where the latest release is described. The UpdateFeed setting points elsewhere, e.g.
-    /// `-UpdateFeed file:///…/latest.json` on the command line, to try an update without
-    /// publishing it. Whatever it points to still has to pass the signature check.
+    /// Where to find out about the latest release. To try an update without publishing it, point
+    /// the UpdateFeed setting somewhere else, for example with `-UpdateFeed file:///…/latest.json`
+    /// on the command line. Whatever it points to still has to pass the signature check.
     private static var feed: URL {
         UserDefaults.standard.string(forKey: "UpdateFeed").flatMap(URL.init(string:))
             ?? URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!
@@ -93,8 +100,8 @@ enum Updates {
     // MARK: Installing
 
     /// Downloads a release and puts it where this copy of Decanter is, or in Applications if
-    /// this copy can't be replaced. Returns where it went; the running app is still the old
-    /// one until that's opened.
+    /// this copy can't be replaced. It returns where the new copy went. The running app is
+    /// still the old one until that's opened.
     static func install(_ release: Release) async throws -> URL {
         guard let zip = release.zip else { throw InstallError.noDownload }
         let fm = FileManager.default
@@ -110,16 +117,24 @@ enum Updates {
                 throw InstallError.notReplaceable
             }
         }
-        // On the same disk as the destination, so putting the new copy there is a rename.
+        // Work on the same disk as the destination, so putting the new copy in place is just a rename.
         let work = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: destination, create: true)
         defer { try? fm.removeItem(at: work) }
-        let (download, _) = try await URLSession.shared.download(from: zip)
+        let (download, response) = try await URLSession.shared.download(from: zip)
+        if let status = (response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
+            throw InstallError.downloadFailed
+        }
         let archive = work.appendingPathComponent("update.zip")
         try fm.moveItem(at: download, to: archive)
         guard try await Shell.run(URL(fileURLWithPath: "/usr/bin/ditto"), ["-x", "-k", archive.path, work.path]) == 0,
               let new = try fm.contentsOfDirectory(at: work, includingPropertiesForKeys: nil).first(where: { $0.pathExtension == "app" }),
               Bundle(url: new)?.bundleIdentifier == Bundle.main.bundleIdentifier else {
             throw InstallError.notDecanter
+        }
+        // Never install an older version, or the same one again, which would be offered on every launch.
+        guard let version = Bundle(url: new)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              isNewer(version, than: currentVersion) else {
+            throw InstallError.notNewer
         }
         try checkSignature(of: new)
         if fm.fileExists(atPath: destination.path) {

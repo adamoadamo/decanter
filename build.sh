@@ -1,10 +1,10 @@
 #!/bin/bash
-# Builds Decanter.app (universal: arm64 + x86_64) into ./build.
+# Builds Decanter.app into ./build, as a universal app for both arm64 and x86_64 Macs.
 #
-#   ./build.sh              quick local build, ad-hoc signed (runs on this Mac only)
-#   ./build.sh --notarise   Developer ID signed, notarised, stapled, zipped into ./dist
-#   ./build.sh --release    --notarise, then publishes the zip as a GitHub release, which
-#                           is what tells existing copies of Decanter there's an update
+#   ./build.sh              A quick local build, ad-hoc signed, that only runs on this Mac.
+#   ./build.sh --notarise   Signs with Developer ID, notarises, staples and zips into ./dist.
+#   ./build.sh --release    Does --notarise, then publishes the zip as a GitHub release.
+#                           That's what tells existing copies of Decanter there's an update.
 #
 # Notarising needs an unlocked keychain holding the Developer ID key and the
 # notary profile below. See RELEASING.md.
@@ -12,10 +12,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP="build/Decanter.app"
-# Developer ID Application: Adam O'Reilly (83YKH78UXW), signed by hash.
+# The "Developer ID Application: Adam O'Reilly (83YKH78UXW)" certificate, picked by its hash.
 IDENTITY="${DECANTER_SIGN_IDENTITY:-755F880D8DBA3C9C44D4244F110D3469DA72F37A}"
 PROFILE="${DECANTER_NOTARY_PROFILE:-perturbazione-notary}"
-REPO="adamoadamo/decanter"   # must match Updates.repo in Sources/Decanter/Updates.swift
+REPO="adamoadamo/decanter"   # This must match Updates.repo in Sources/Decanter/Updates.swift.
 
 NOTARISE=0
 RELEASE=0
@@ -56,7 +56,7 @@ if [ ! -f Resources/AppIcon.icns ] || [ Resources/AppIcon.png -nt Resources/AppI
     iconutil -c icns "$ICONSET" -o Resources/AppIcon.icns
 fi
 
-# Command Line Tools can't build both architectures in one go, so build each and merge.
+# Command Line Tools can't build both architectures in one go, so build each one and merge them.
 echo "Compiling (arm64 + x86_64)…"
 for arch in arm64 x86_64; do
     swift build -c release --triple "$arch-apple-macosx14.0"
@@ -85,7 +85,7 @@ echo "Submitting to Apple (usually one to two minutes)…"
 SUBMIT_ZIP="build/Decanter-submit.zip"
 RESULT="build/notary-result.json"
 rm -f "$SUBMIT_ZIP"
-ditto -c -k --keepParent "$APP" "$SUBMIT_ZIP"   # ditto, never zip
+ditto -c -k --keepParent "$APP" "$SUBMIT_ZIP"   # Always use ditto here, never zip.
 xcrun notarytool submit "$SUBMIT_ZIP" --keychain-profile "$PROFILE" --wait --output-format json > "$RESULT"
 rm -f "$SUBMIT_ZIP"
 STATUS=$(plutil -extract status raw -o - "$RESULT")

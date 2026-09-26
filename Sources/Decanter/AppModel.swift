@@ -8,14 +8,15 @@ struct Game: Identifiable, Codable, Hashable {
     var exePath: String
     var engine = Engine.default
     var graphics = Graphics.default
-    /// Decanter picks the engine and graphics (see Setup.candidates), and moves on to the next
-    /// setup when the game closes or crashes as it starts. Picking either by hand turns it off.
+    /// When this is on, Decanter picks the engine and graphics (see Setup.candidates) and tries
+    /// the next setup if the game closes or crashes as it starts. Choosing either by hand turns it off.
     var automatic = true
-    /// How far down Setup.candidates an automatic game has had to go.
+    /// How far down the Setup.candidates list an automatic game has had to go.
     var setupStep = 0
+    var display = Display.gameSetting
+    /// Launch options players typed in by hand before 1.2.4. They're no longer shown, but they're
+    /// still passed to the game so one that was set up with them keeps working.
     var arguments = ""
-    var virtualDesktop = false
-    var desktopSize = "1280x720"
     var added = Date()
     var lastPlayed: Date?
 
@@ -25,34 +26,41 @@ struct Game: Identifiable, Codable, Hashable {
         self.engine = engine
     }
 
-    // Tolerates library files written by older versions with fewer fields.
+    // Library files written by older versions have fewer fields, so this copes with any that are missing.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
-        // Games installed with Run Installer live in the support folder, which has moved.
+        // Games installed with Run Installer live in the support folder, which moved when the app was renamed.
         exePath = AppPaths.migrated(try c.decode(String.self, forKey: .exePath))
         if c.contains(.engine) {
             engine = (try? c.decode(Engine.self, forKey: .engine)) ?? Engine.owning(exePath) ?? .default
         } else {
-            // Saved by 1.0, which only had Wine Staging. Staying there keeps the game's
-            // saves and settings, which live in that engine's Windows environment.
+            // This was saved by 1.0, which only had Wine Staging. Leaving the game there keeps
+            // its saves and settings, because they live in that engine's Windows environment.
             engine = .wine
         }
         graphics = (try? c.decodeIfPresent(Graphics.self, forKey: .graphics)) ?? .default
-        // Before 1.2 the engine was only ever Wine Staging because 1.0 had nothing else or
-        // because the player picked it, so leave those as they are.
+        // Before 1.2, a game was only on Wine Staging because 1.0 had nothing else or because
+        // the player chose it. Either way, leave those games where they are.
         automatic = try c.decodeIfPresent(Bool.self, forKey: .automatic)
             ?? (engine == .crossover || Engine.owning(exePath) != nil)
         setupStep = try c.decodeIfPresent(Int.self, forKey: .setupStep) ?? 0
         arguments = try c.decodeIfPresent(String.self, forKey: .arguments) ?? ""
-        virtualDesktop = try c.decodeIfPresent(Bool.self, forKey: .virtualDesktop) ?? false
-        desktopSize = try c.decodeIfPresent(String.self, forKey: .desktopSize) ?? "1280x720"
+        // Before 1.2.4, "Run inside a window" used a Wine virtual desktop. Those games now open Windowed.
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+        display = try c.decodeIfPresent(Display.self, forKey: .display)
+            ?? (try legacy.decodeIfPresent(Bool.self, forKey: .virtualDesktop) == true ? .windowed : .gameSetting)
         added = try c.decodeIfPresent(Date.self, forKey: .added) ?? Date()
         lastPlayed = try c.decodeIfPresent(Date.self, forKey: .lastPlayed)
     }
 
     var url: URL { URL(fileURLWithPath: exePath) }
+
+    private enum LegacyKeys: String, CodingKey { case virtualDesktop }
+
+    /// Settings older versions saved that this one has replaced, so dropping them loses nothing.
+    static let retiredKeys: Set = ["virtualDesktop", "desktopSize"]
 }
 
 enum SetupState: Equatable {
@@ -77,14 +85,14 @@ final class AppModel {
     var games: [Game] = [] { didSet { saveLibrary() } }
     var selection: Game.ID?
 
-    /// Installed engines. A missing key means that engine isn't installed.
+    /// The engines that are installed. If an engine has no entry, it isn't installed.
     var engines: [Engine: WineBinary] = [:]
     var versions: [Engine: String] = [:]
-    /// Download/setup progress per engine. A missing key means idle.
+    /// How each engine's download and setup is going. An engine with no entry is idle.
     var installs: [Engine: SetupState] = [:]
     var rosettaMissing = false
-    /// True from the first-run screen's Download until that engine is ready (or while it
-    /// shows a failure), so the screen stays up through setup. Settings reinstalls don't set it.
+    /// Keeps the first-run screen up from the moment its Download is pressed until the engine
+    /// is ready, or while it shows a failure. Reinstalling from Settings doesn't set it.
     var firstRunSetup = false
     var customWinePath: String {
         didSet { UserDefaults.standard.set(customWinePath, forKey: "customWinePath") }
@@ -97,19 +105,39 @@ final class AppModel {
     var installerRunning = false
     var pendingInstaller: URL?
     var alert: String?
-    /// A newer release than this one, until the player dismisses it.
+    /// A release newer than this one, kept until the player dismisses it.
     var update: Updates.Release?
     var updateStatus = Updates.Status.unknown
+    /// The game the player asked to remove, until they confirm or cancel.
+    var pendingRemoval: Game?
+    /// The game being renamed in the Rename sheet.
+    var renaming: Game?
 
     @ObservationIgnored private var runningWine: [UUID: WineBinary] = [:]
     @ObservationIgnored private var launchedAt: [UUID: Date] = [:]
-    /// Setups tried by itself since the player last pressed Play, per game.
+    /// A token for each start, so one that was cancelled or replaced by a newer Play never launches.
+    @ObservationIgnored private var startTokens: [UUID: UUID] = [:]
+    /// How many setups Decanter has tried on its own for each game since Play was last pressed.
     @ObservationIgnored private var setupRetries: [UUID: Int] = [:]
-    /// Games stopped after crashing as they started, to relaunch with the next setup.
+    /// The setup each game was on when Play was pressed, so it can go back there if none work.
+    @ObservationIgnored private var startStep: [UUID: Int] = [:]
+    /// Games that crashed as they started and were stopped, so they relaunch with the next setup.
     @ObservationIgnored private var retryOnExit: Set<UUID> = []
+    /// The end of the current run's log, which is searched for crash messages. It starts empty
+    /// each run so a crash from an earlier attempt in the same log isn't mistaken for a new one.
+    @ObservationIgnored private var crashScanTail: [UUID: String] = [:]
     @ObservationIgnored private var stopping: Set<UUID> = []
-    @ObservationIgnored private var cancelledStarts: Set<UUID> = []
+    /// Windows environments being reset. Anything that needs one waits for the reset to finish.
+    @ObservationIgnored private var resetTasks: [Engine: Task<Void, Never>] = [:]
+    /// Turned off when part of the library couldn't be read and no copy of it could be kept,
+    /// so a partial list never gets saved over the original.
+    @ObservationIgnored private var canSaveLibrary = true
+    /// Who asked for the running update check, and so how to answer. It's nil for the quiet
+    /// check at launch, an alert for the menu, and an answer in place for the About window.
+    @ObservationIgnored private var updateAnswer: UpdateAnswer?
+    private enum UpdateAnswer { case alert, about }
     @ObservationIgnored private var iconCache: [UUID: NSImage] = [:]
+    @ObservationIgnored private var makers: [String: Maker?] = [:]
     @ObservationIgnored private var missingIcons: Set<UUID> = []
     @ObservationIgnored private var prepareTasks: [Engine: Task<WineBinary, Error>] = [:]
     @ObservationIgnored private lazy var quitHotKey = QuitHotKey { [weak self] in
@@ -131,27 +159,32 @@ final class AppModel {
 
     // MARK: Updates
 
-    /// Every launch checks quietly, and says nothing about errors or a version the player
-    /// skipped. Check for Updates… always answers: from the menu with an alert, from the
-    /// About window in place.
+    /// Every launch checks quietly and says nothing about errors or a version the player skipped.
+    /// Check for Updates… always gets an answer, as an alert from the menu or in place in the
+    /// About window, even if a check was already running when it was asked.
     func checkForUpdates(userInitiated: Bool = false, answerInAbout: Bool = false) {
         if case .installing = updateStatus { return }
-        guard updateStatus != .checking else { return }
+        if userInitiated { updateAnswer = answerInAbout ? .about : .alert }
+        guard updateStatus != .checking else { return }  // The check that's already running will answer.
         updateStatus = .checking
-        let alerts = userInitiated && !answerInAbout
         Task {
-            do {
-                if let release = try await Updates.latest(), Updates.isNewer(release.version, than: Updates.currentVersion) {
-                    updateStatus = .available(release)
-                    let skipped = UserDefaults.standard.string(forKey: "skippedVersion") == release.version
-                    if !answerInAbout, userInitiated || !skipped { update = release }
-                } else {
-                    updateStatus = .upToDate
-                    if alerts { alert = "Decanter \(Updates.currentVersion) is the latest version." }
-                }
-            } catch {
+            var latest: Updates.Release?
+            var failed = false
+            do { latest = try await Updates.latest() } catch { failed = true }
+            // An install may have started while this was checking. If so, leave it alone.
+            guard updateStatus == .checking else { return }
+            let answer = updateAnswer
+            updateAnswer = nil
+            if let latest, Updates.isNewer(latest.version, than: Updates.currentVersion) {
+                updateStatus = .available(latest)
+                let skipped = UserDefaults.standard.string(forKey: "skippedVersion") == latest.version
+                if answer == .alert || (answer == nil && !skipped) { update = latest }
+            } else if failed {
                 updateStatus = .failed
-                if alerts { alert = "Couldn’t check for updates. Check your internet connection and try again." }
+                if answer == .alert { alert = "Couldn’t check for updates. Check your internet connection and try again." }
+            } else {
+                updateStatus = .upToDate
+                if answer == .alert { alert = "Decanter \(Updates.currentVersion) is the latest version." }
             }
         }
     }
@@ -242,6 +275,42 @@ final class AppModel {
         if selection == game.id { selection = sortedGames.first?.id }
     }
 
+    /// Asks the player to confirm first. ContentView shows the question and does the removal.
+    func requestRemoval(of game: Game) { pendingRemoval = game }
+
+    func rename(_ id: UUID, to name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let i = games.firstIndex(where: { $0.id == id }) else { return }
+        games[i].name = name
+    }
+
+    /// Points a game whose .exe has moved (or been replaced by a new build somewhere else) at
+    /// the new file, keeping its settings. An automatic game starts again from its best setup.
+    func locate(_ game: Game) {
+        let fm = FileManager.default
+        var folder = game.url.deletingLastPathComponent()
+        while !fm.fileExists(atPath: folder.path), folder.pathComponents.count > 1 {
+            folder = folder.deletingLastPathComponent()
+        }
+        let panel = NSOpenPanel()
+        panel.message = "Where is “\(game.name)” now? Choose its .exe."
+        panel.prompt = "Choose"
+        panel.allowedContentTypes = Self.windowsTypes
+        panel.directoryURL = folder
+        guard panel.runModal() == .OK, let url = panel.url,
+              let i = games.firstIndex(where: { $0.id == game.id }) else { return }
+        games[i].exePath = url.path
+        games[i].setupStep = 0
+        applySetup(to: game.id)
+        if let ico = PEIcon.icoData(fromExecutableAt: url) {
+            try? FileManager.default.createDirectory(at: AppPaths.icons, withIntermediateDirectories: true)
+            try? ico.write(to: AppPaths.icon(for: game.id))
+        }
+        iconCache[game.id] = nil
+        missingIcons.remove(game.id)
+        notices[game.id] = nil
+    }
+
     func icon(for game: Game) -> NSImage? {
         if let image = iconCache[game.id] { return image }
         guard !missingIcons.contains(game.id),
@@ -266,7 +335,7 @@ final class AppModel {
     /// file, or games and settings saved by a newer build) is copied aside first.
     private func loadLibrary() {
         guard let data = try? Data(contentsOf: AppPaths.library) else { return }
-        // Read game by game, so one unreadable entry doesn't cost the rest.
+        // Read each game on its own, so one unreadable entry doesn't lose all the others.
         struct Entry: Decodable {
             let game: Game?
             init(from decoder: Decoder) throws { game = try? Game(from: decoder) }
@@ -276,30 +345,39 @@ final class AppModel {
         if saved.count != entries?.count || Self.rewriteLoses(data, saved) {
             let stamp = Date().formatted(.iso8601.dateSeparator(.omitted).timeSeparator(.omitted))
             let copy = AppPaths.support.appendingPathComponent("library-\(stamp).json")
-            guard (try? FileManager.default.copyItem(at: AppPaths.library, to: copy)) != nil else { return }
-            alert = "Part of your game library couldn’t be read, possibly because a newer Decanter saved it. The original is kept as \(copy.lastPathComponent) in Decanter’s Application Support folder."
+            if (try? FileManager.default.copyItem(at: AppPaths.library, to: copy)) != nil {
+                alert = "Part of your game library couldn’t be read, possibly because a newer Decanter saved it. The original is kept as \(copy.lastPathComponent) in Decanter’s Application Support folder."
+            } else {
+                // There's no copy, so don't save over the original either.
+                canSaveLibrary = false
+                alert = "Part of your game library couldn’t be read, and Decanter couldn’t keep a copy of it. Changes to your library won’t be saved until Decanter is restarted."
+            }
         }
         games = saved
     }
 
-    /// Whether saving `games` over `data` would drop fields or engines this build doesn't know.
+    /// Whether saving `games` over `data` would lose fields or engines this build doesn't know about.
     private static func rewriteLoses(_ data: Data, _ games: [Game]) -> Bool {
         guard let old = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]],
               let new = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(games))) as? [[String: Any]],
               old.count == new.count else { return true }
         return zip(old, new).contains { old, new in
-            old.keys.contains { new[$0] == nil } || old["engine"].map { $0 as? String != new["engine"] as? String } == true
+            old.keys.contains { new[$0] == nil && !Game.retiredKeys.contains($0) }
+                || old["engine"].map { $0 as? String != new["engine"] as? String } == true
         }
     }
 
     private func saveLibrary() {
+        guard canSaveLibrary else { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
         try? encoder.encode(games).write(to: AppPaths.library, options: .atomic)
     }
 
-    /// "Game.exe" in "Cool Game/bin/x64" becomes "Cool Game".
+    /// The name the game gives itself, if it has one (see shippedName). Otherwise a generic
+    /// name like "Game.exe" in "Cool Game/bin/x64" becomes "Cool Game".
     static func defaultName(for url: URL) -> String {
+        if let shipped = shippedName(for: url) { return shipped }
         let generic: Set = ["game", "start", "launcher", "play", "main", "nw", "run", "app", "client", "win", "windows"]
         let plumbing: Set = ["bin", "x64", "x86", "win64", "win32", "binaries", "game", "release"]
         let base = url.deletingPathExtension().lastPathComponent
@@ -313,6 +391,26 @@ final class AppModel {
         return folder.pathComponents.count > 1 ? folder.lastPathComponent : base
     }
 
+    /// The name some engines store next to the game. Unity puts it in `_Data/app.info` (company,
+    /// then product), and NW.js games such as RPG Maker MV put it in `package.json`.
+    static func shippedName(for exe: URL) -> String? {
+        let folder = exe.deletingLastPathComponent()
+        var names: [String?] = []
+        let info = folder.appendingPathComponent(exe.deletingPathExtension().lastPathComponent + "_Data/app.info")
+        if let text = try? String(contentsOf: info, encoding: .utf8) {
+            names.append(text.components(separatedBy: .newlines).dropFirst().first)
+        }
+        for json in ["package.json", "www/package.json"].map(folder.appendingPathComponent) {
+            guard let data = try? Data(contentsOf: json),
+                  let package = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+            names.append((package["window"] as? [String: Any])?["title"] as? String)
+            names.append(package["name"] as? String)
+        }
+        let placeholders: Set = ["", "game", "nw", "nwjs", "unity", "rmmv", "rmmz", "rpg maker", "rpgmaker"]
+        return names.compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+            .first { !placeholders.contains($0.lowercased()) }
+    }
+
     static func looksLikeInstaller(_ url: URL) -> Bool {
         let name = url.lastPathComponent.lowercased()
         if name.hasPrefix("unins") { return false }
@@ -323,11 +421,11 @@ final class AppModel {
 
     func installState(_ engine: Engine) -> SetupState { installs[engine] ?? .idle }
 
-    /// The first-run screen shows when no engine is installed at all (someone who already
-    /// has Wine Staging goes straight to their library; CrossOver downloads on first Play).
+    /// The first-run screen shows only when no engine is installed at all. Someone who already
+    /// has Wine Staging goes straight to their library, and CrossOver downloads on first Play.
     var needsSetup: Bool { engines.isEmpty || firstRunSetup }
 
-    /// The engine the menu commands act on: the selected game's, else the default.
+    /// The engine the menu commands act on: the selected game's, or the default if there's none.
     var selectedEngine: Engine { game(selection)?.engine ?? .default }
 
     func isInUse(_ engine: Engine) -> Bool {
@@ -352,7 +450,7 @@ final class AppModel {
         Task { try? await prepare(engine, reinstall: true) }
     }
 
-    /// The first-run screen's Download / Try Again.
+    /// What the first-run screen's Download and Try Again buttons do.
     func setUpFirstRun() {
         firstRunSetup = true
         Task {
@@ -360,14 +458,16 @@ final class AppModel {
         }
     }
 
-    /// Makes an engine ready to run games: downloads it if needed, then creates its Windows
-    /// environment. Progress and failures go to `installs[engine]`, which stays "working"
-    /// until both steps finish, so the UI never flickers between them. Concurrent callers
-    /// share one run.
+    /// Gets an engine ready to run games by downloading it if needed, then creating its Windows
+    /// environment. Progress and failures go to `installs[engine]`, which stays "working" until
+    /// both steps finish so the window doesn't flicker between them. If several callers ask at
+    /// once, they all share one run.
     @discardableResult
     private func prepare(_ engine: Engine, reinstall: Bool = false) async throws -> WineBinary {
-        // Join a run already under way first, so nobody launches a game from an engine
-        // that's being replaced or a prefix that's half made.
+        // Let any reset finish first, so nothing starts in a folder that's being deleted.
+        if let reset = resetTasks[engine] { await reset.value }
+        // If a run is already under way, join it. That way nobody launches a game from an
+        // engine that's being replaced or from a prefix that's only half made.
         if let task = prepareTasks[engine] { return try await task.value }
         if !reinstall, let wine = engines[engine], Wine.prefixReady(engine) { return wine }
         let task = Task { () throws -> WineBinary in
@@ -453,10 +553,13 @@ final class AppModel {
 
     // MARK: Playing
 
-    /// `retry` is Decanter trying the next setup by itself, rather than the player pressing Play.
+    /// `retry` means Decanter is trying the next setup on its own, rather than the player pressing Play.
     func play(_ game: Game, retry: Bool = false) {
         guard running[game.id] == nil, !starting.contains(game.id) else { return }
-        if !retry { setupRetries[game.id] = 0 }
+        if !retry {
+            setupRetries[game.id] = 0
+            startStep[game.id] = game.setupStep
+        }
         applySetup(to: game.id)
         guard let game = self.game(game.id) else { return }
         // Rosetta may have been installed from Settings since the last check.
@@ -465,56 +568,74 @@ final class AppModel {
             notices[game.id] = "Wine needs Rosetta 2. Install it from the setup screen or Settings, then try again."
             return
         }
+        // The game's page already says the file is missing and offers a Locate… button.
         guard FileManager.default.fileExists(atPath: game.exePath) else {
-            notices[game.id] = "Can’t find the game file. Was it moved or deleted?"
+            NSSound.beep()
             return
         }
-        // Some games only use WebView2 for an optional web page, so say so rather than refuse.
+        // Some games only use WebView2 for an optional web page, so warn rather than refuse to start.
         notices[game.id] = Setup.usesWebView2(game.url)
             ? "This game uses Microsoft Edge WebView2, which doesn’t work in Wine yet. If it asks to install WebView2, it probably can’t run."
             : nil
-        logs[game.id] = ""
-        cancelledStarts.remove(game.id)
+        if retry {
+            // Keep the log of the attempt that failed, because it explains why Decanter switched.
+            appendLog(game.id, "\n--- Trying \(Setup(engine: game.engine, graphics: game.graphics).title) ---\n",
+                      scanForCrashes: false)
+        } else {
+            logs[game.id] = ""
+        }
+        crashScanTail[game.id] = ""
+        let token = UUID()
+        startTokens[game.id] = token
         starting.insert(game.id)
         Task {
-            defer { starting.remove(game.id) }
+            defer { finishStart(game.id, token) }
             do {
                 let wine = try await prepare(game.engine)
                 await installBundledRuntimes(for: game, with: wine)
                 if game.graphics == .dxvk { await Wine.installDXVK(wine) }
-                // Cancelled, removed, force-quit or reset while getting ready.
-                guard cancelledStarts.remove(game.id) == nil, let current = self.game(game.id) else { return }
-                // Launch options may have changed while it was getting ready.
+                // Stop here if the game was cancelled, removed, force-quit or reset while it was getting ready.
+                guard startTokens[game.id] == token, let current = self.game(game.id) else { return }
+                // Launch with the game's current settings, since they may have changed in the meantime.
                 running[game.id] = try launch(current, with: wine)
                 runningWine[game.id] = wine
                 launchedAt[game.id] = Date()
                 updateQuitHotKey()
                 if let i = games.firstIndex(where: { $0.id == game.id }) { games[i].lastPlayed = Date() }
             } catch {
+                guard startTokens[game.id] == token else { return }
                 notices[game.id] = "Couldn’t start the game: \(error.localizedDescription)"
             }
         }
     }
 
-    /// Runtime installers games often ship next to their .exe, with their silent-install flags.
+    /// Ends a start, unless it was cancelled and the game has been started again since.
+    private func finishStart(_ id: UUID, _ token: UUID) {
+        guard startTokens[id] == token else { return }
+        startTokens[id] = nil
+        starting.remove(id)
+    }
+
+    /// Runtime installers that games often ship next to their .exe, and the flags that make them silent.
     private static let runtimeInstallers: [(name: String, matches: (String) -> Bool, args: [String])] = [
         ("OpenAL", { $0 == "oalinst.exe" }, ["/s"]),
         ("Visual C++ runtime", { $0.hasPrefix("vcredist") || $0.hasPrefix("vc_redist") }, ["/q", "/norestart"]),
     ]
 
-    /// Silently installs any bundled runtimes (e.g. oalinst.exe for OpenAL) the first time
-    /// they're seen. Remembered inside the prefix, so resetting it starts fresh.
+    /// Quietly installs any runtimes the game bundles (like oalinst.exe for OpenAL) the first time
+    /// they turn up. The record of what's done lives inside the prefix, so a reset starts fresh.
     private func installBundledRuntimes(for game: Game, with wine: WineBinary) async {
         let record = wine.prefix.appendingPathComponent("decanter-runtimes.txt")
         let legacyRecord = wine.prefix.appendingPathComponent("yeobgamer-runtimes.txt")
-        try? FileManager.default.moveItem(at: legacyRecord, to: record)  // Named before the rename.
+        try? FileManager.default.moveItem(at: legacyRecord, to: record)  // The file's name from before Decanter was renamed.
         var done = Set(((try? String(contentsOf: record, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init))
         let found = Self.runtimeInstallers(near: game.url).filter { !done.contains($0.key) }
+        let notice = notices[game.id]
 
         for item in found {
             notices[game.id] = "Installing \(item.name) (included with the game)…"
-            // A silent installer that's still going after three minutes is stuck; don't
-            // let it block the game forever.
+            // A silent installer that's still going after three minutes is stuck. Don't let
+            // it hold up the game forever.
             let status = try? await Wine.runAndWait(wine, [item.url.path] + item.args,
                                                     cwd: item.url.deletingLastPathComponent(), timeout: 180)
             let result = status.map { "exit \($0)" } ?? "timed out"
@@ -523,13 +644,13 @@ final class AppModel {
         }
         if !found.isEmpty {
             try? done.sorted().joined(separator: "\n").write(to: record, atomically: true, encoding: .utf8)
-            notices[game.id] = nil
+            notices[game.id] = notice
         }
     }
 
     /// Looks up to three folders deep beside the game's .exe for known runtime installers.
     private static func runtimeInstallers(near exe: URL) -> [(name: String, url: URL, args: [String], key: String)] {
-        // A game .exe sitting loose in one of these doesn't own the installers around it.
+        // A game .exe sitting loose in one of these folders doesn't own the installers around it.
         let home = FileManager.default.homeDirectoryForCurrentUser
         let shared = [home] + ["Desktop", "Downloads", "Documents"].map { home.appendingPathComponent($0) }
         guard !shared.map(\.path).contains(exe.deletingLastPathComponent().path),
@@ -553,15 +674,14 @@ final class AppModel {
     private func launch(_ game: Game, with wine: WineBinary) throws -> Process {
         let exe = game.url
         var args: [String] = []
-        if game.virtualDesktop {
-            // Explorer starts the program itself, so it needs a Windows-style path.
-            args += ["explorer", "/desktop=Decanter,\(game.desktopSize)"]
-        }
         if exe.pathExtension.lowercased() == "msi" { args += ["msiexec", "/i"] }
-        args.append(game.virtualDesktop ? Wine.windowsPath(exe) : exe.path)
+        args.append(exe.path)
+        let maker = maker(of: game)
+        args += maker?.launchArguments ?? []
+        args += maker?.arguments(for: game.display) ?? []
         args += splitArguments(game.arguments)
 
-        // Run from the game's folder: most games load their files relative to it.
+        // Run from the game's folder, because most games load their files relative to it.
         let process = Wine.process(wine, args, cwd: exe.deletingLastPathComponent(), graphics: game.graphics)
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -583,30 +703,34 @@ final class AppModel {
             DispatchQueue.main.async { self.launchedProgramExited(id, p, status: status, after: seconds) }
         }
         let version = versions[wine.engine].map { " (\($0))" } ?? ""
-        appendLog(id, "[\(wine.engine.title)\(version)] $ wine \(args.joined(separator: " "))\n")
+        let madeWith = maker.map { ", made with \($0.title)" } ?? ""
+        appendLog(id, "[\(wine.engine.title)\(version)\(madeWith)] $ wine \(args.joined(separator: " "))\n")
         try process.run()
         return process
     }
 
-    private func appendLog(_ id: UUID, _ text: String) {
-        let previous = logs[id] ?? ""
-        var log = previous + text
+    private func appendLog(_ id: UUID, _ text: String, scanForCrashes: Bool = true) {
+        var log = (logs[id] ?? "") + text
         if log.count > 200_000 { log = String(log.suffix(150_000)) }
         logs[id] = log
-        // With the end of the last read, in case a message was split between reads.
-        noticeCrash(id, in: String(previous.suffix(200)) + text)
+        guard scanForCrashes else { return }
+        // Search the new text along with the end of this run's earlier output, in case a message
+        // was split between two reads.
+        let tail = crashScanTail[id] ?? ""
+        crashScanTail[id] = String((tail + text).suffix(200))
+        noticeCrash(id, in: tail + text)
     }
 
-    /// A game that overflows its stack inside Wine never recovers or shows a window;
-    /// it just sits there looking like it's running. Stop it and say what happened.
+    /// A game that overflows its stack inside Wine never recovers or shows a window. It just
+    /// sits there looking like it's running, so stop it and say what happened.
     private func noticeCrash(_ id: UUID, in text: String) {
         guard running[id] != nil, !stopping.contains(id), let game = game(id) else { return }
         let crashed = ["Unhandled exception", "Unhandled page fault", "virtual_setup_exception stack overflow",
                        "nested exception on signal stack"].contains { text.contains($0) }
         if crashed, startedRecently(id), let next = nextSetup(for: game) {
             retryOnExit.insert(id)
-            notices[id] = "The game crashed with \(Setup(engine: game.engine, graphics: game.graphics).title), so Decanter is trying \(next.title)…"
-            stop(game)
+            notices[id] = "The game crashed with \(Setup(engine: game.engine, graphics: game.graphics).title), so Decanter switched to \(next.title)."
+            stop(game, retrying: true)
             return
         }
         if text.contains("virtual_setup_exception stack overflow") || text.contains("nested exception on signal stack") {
@@ -620,9 +744,9 @@ final class AppModel {
         }
     }
 
-    /// What to try when a game crashes. DXVK first for a CrossOver game on OpenGL: Wine Staging
-    /// can't run Direct3D 10/11 games on Apple Silicon at all. A game installed with Run
-    /// Installer has to stay in the engine it was installed in.
+    /// What to suggest when a game crashes. For a CrossOver game on OpenGL, DXVK comes first,
+    /// because Wine Staging can't run Direct3D 10/11 games on Apple Silicon at all. A game
+    /// installed with Run Installer has to stay in the engine it was installed in.
     private func nextStep(for game: Game) -> String? {
         let other = Engine.owning(game.exePath) == nil ? Engine.allCases.first { $0 != game.engine } : nil
         switch (game.engine == .crossover && game.graphics == .opengl, other) {
@@ -633,9 +757,9 @@ final class AppModel {
         }
     }
 
-    /// The .exe Decanter started has exited, which isn't always the end of the game: some
-    /// start from a launcher that opens the real game and quits (every Ren'Py game does).
-    /// With nothing else running in the engine, the game is over once Wine has no programs left.
+    /// The .exe Decanter started has exited, but that isn't always the end of the game. Some
+    /// games start from a launcher that opens the real game and quits (every Ren'Py game does).
+    /// If nothing else is using the engine, the game is over once Wine has no programs left.
     private func launchedProgramExited(_ id: UUID, _ process: Process, status: Int32, after seconds: TimeInterval) {
         guard let wine = runningWine[id], !stopping.contains(id), !engineBusy(wine.engine, besides: id) else {
             gameExited(id, process, status: status, after: seconds)
@@ -648,7 +772,7 @@ final class AppModel {
     }
 
     private func gameExited(_ id: UUID, _ process: Process, status: Int32, after seconds: TimeInterval) {
-        // Already handled: Stop ends a game whose launcher has exited without waiting for Wine.
+        // This was already handled. Stop ends a game whose launcher has exited without waiting for Wine.
         guard running[id] === process else { return }
         let wine = runningWine[id]
         // How long the game itself ran, which for a game with a launcher is longer than `seconds`.
@@ -658,18 +782,24 @@ final class AppModel {
         updateQuitHotKey()
         let stoppedByUser = stopping.remove(id) != nil
         let failedToStart = retryOnExit.remove(id) != nil || (!stoppedByUser && status != 0 && ran < Self.quickExit)
-        if failedToStart, let game = game(id), game.automatic {
+        // No setup can run a WebView2 game, and its notice already explains why.
+        if failedToStart, let game = game(id), game.automatic, !Setup.usesWebView2(game.url) {
             if let next = nextSetup(for: game) {
                 if notices[id] == nil {
-                    notices[id] = "The game closed as it started with \(Setup(engine: game.engine, graphics: game.graphics).title), so Decanter is trying \(next.title)…"
+                    notices[id] = "The game closed as it started with \(Setup(engine: game.engine, graphics: game.graphics).title), so Decanter switched to \(next.title)."
                 }
                 trySetup(next, for: id, after: wine)
             } else {
-                notices[id] = "The game closed as it started with every setup Decanter has. The log below may explain why."
+                // None of the others worked either, so go back to the one it started on.
+                if let i = games.firstIndex(where: { $0.id == id }), let step = startStep[id] {
+                    games[i].setupStep = step
+                    applySetup(to: id)
+                }
+                notices[id] = "The game closed as it started with every setup Decanter tried. The log below may explain why."
             }
             return
         }
-        if !stoppedByUser, status != 0, seconds < 15, notices[id] == nil {
+        if !stoppedByUser, status != 0, ran < 15, notices[id] == nil {
             notices[id] = "The game closed right away (exit code \(status))."
                 + (game(id).flatMap(nextStep).map { " If it keeps happening, try \($0)." } ?? "")
                 + " The log below may explain why."
@@ -680,14 +810,28 @@ final class AppModel {
 
     /// A crash this soon after starting counts as the setup not working.
     private static let startupWindow: TimeInterval = 60
-    /// So does exiting with an error this soon: any later could be a game that returns an
-    /// error code when quit normally.
+    /// So does exiting with an error this soon. Any later, and it could be a game that returns
+    /// an error code when it's quit normally.
     private static let quickExit: TimeInterval = 20
 
-    /// Points an automatic game at the setup it's up to.
+    private func setups(for game: Game) -> [Setup] {
+        Setup.candidates(for: game.url, madeWith: maker(of: game), stagingInstalled: engines[.wine] != nil)
+    }
+
+    /// What the game was made with. Finding out means reading files, so it's looked up once
+    /// per .exe while Decanter is open.
+    func maker(of game: Game) -> Maker? {
+        if let known = makers[game.exePath] { return known }
+        let found = Maker.of(game.url)
+        // A missing file might come back later, so only remember the answer while the file is there.
+        if FileManager.default.fileExists(atPath: game.exePath) { makers[game.exePath] = found }
+        return found
+    }
+
+    /// Switches an automatic game to the setup it's currently up to.
     private func applySetup(to id: UUID) {
         guard let i = games.firstIndex(where: { $0.id == id }), games[i].automatic else { return }
-        let setups = Setup.candidates(for: games[i].url)
+        let setups = setups(for: games[i])
         let setup = setups[min(games[i].setupStep, setups.count - 1)]
         if games[i].engine != setup.engine { games[i].engine = setup.engine }
         if games[i].graphics != setup.graphics { games[i].graphics = setup.graphics }
@@ -701,28 +845,34 @@ final class AppModel {
     /// through every setup since Play was pressed.
     private func nextSetup(for game: Game) -> Setup? {
         guard game.automatic, !Setup.usesWebView2(game.url) else { return nil }
-        let setups = Setup.candidates(for: game.url)
+        let setups = setups(for: game)
         guard setupRetries[game.id, default: 0] < setups.count - 1 else { return nil }
         return setups[(min(game.setupStep, setups.count - 1) + 1) % setups.count]
     }
 
     private func trySetup(_ setup: Setup, for id: UUID, after wine: WineBinary?) {
         guard let i = games.firstIndex(where: { $0.id == id }) else { return }
-        let setups = Setup.candidates(for: games[i].url)
-        games[i].setupStep = setups.firstIndex(of: setup) ?? 0
+        games[i].setupStep = setups(for: games[i]).firstIndex(of: setup) ?? 0
         setupRetries[id, default: 0] += 1
+        // Show the game as starting while the old Wine closes, so Cancel still works.
+        let token = UUID()
+        startTokens[id] = token
+        starting.insert(id)
         Task {
-            // Let the old Wine finish closing, or the next start can't open a window.
+            // Let the old Wine finish closing, or the next start can't open a window. Only
+            // briefly, though: another program may keep it busy.
             if let wine, !engineBusy(wine.engine, besides: id) {
-                _ = try? await Shell.run(wine.wineserver, ["-w"], environment: Wine.environment(for: wine))
+                await Wine.waitUntilIdle(wine, timeout: 10)
             }
+            guard startTokens[id] == token else { return }  // Someone pressed Cancel while we waited.
+            finishStart(id, token)
             let notice = notices[id]
             if let game = game(id) { play(game, retry: true) }
-            if notices[id] == nil { notices[id] = notice }  // play() clears it; keep saying what's going on.
+            if notices[id] == nil { notices[id] = notice }  // play() clears the notice, but it should keep saying what's going on.
         }
     }
 
-    /// Automatic back on starts again from the best setup for the game.
+    /// Turning automatic back on starts again from the game's best setup.
     func setAutomatic(_ on: Bool, for id: UUID) {
         guard let i = games.firstIndex(where: { $0.id == id }) else { return }
         games[i].automatic = on
@@ -732,23 +882,30 @@ final class AppModel {
         }
     }
 
-    func stop(_ game: Game) {
-        if starting.contains(game.id) { cancelledStarts.insert(game.id) }
+    /// `retrying` means Decanter is stopping a game that crashed so it can try the next setup.
+    func stop(_ game: Game, retrying: Bool = false) {
+        if !retrying { retryOnExit.remove(game.id) }
+        // Cancel a start that's under way. Its task may still be downloading or setting up,
+        // but it won't launch anything.
+        if starting.remove(game.id) != nil { startTokens[game.id] = nil }
         guard let process = running[game.id] else { return }
         stopping.insert(game.id)
         // Under CrossOver the game's window belongs to a child process, not the one we
-        // launched, so end that too.
-        let apps = gameApps(for: game)
+        // launched, so end that too. The exception is when another running game has the same
+        // .exe name (every RPG Maker game is Game.exe), because the window could be that one's.
+        let exe = game.url.lastPathComponent.lowercased()
+        let nameShared = games.contains { $0.id != game.id && running[$0.id] != nil && $0.url.lastPathComponent.lowercased() == exe }
+        let apps = nameShared ? [] : gameApps(for: game)
         let launcherGone = !process.isRunning
         if !launcherGone { process.terminate() }
         apps.forEach { kill($0.processIdentifier, SIGTERM) }
         if let wine = runningWine[game.id], !engineBusy(wine.engine, besides: game.id) {
-            // Nothing else runs on this engine, so also clear out its helper processes.
+            // Nothing else is using this engine, so clear out its helper processes too.
             Wine.killAll(wine)
         }
         // Its launcher has already exited, so nothing else will report the game ending.
         if launcherGone { gameExited(game.id, process, status: 0, after: 0) }
-        // Anything that ignored the polite request gets forced after a few seconds.
+        // Anything that ignores the polite request is forced to quit after a few seconds.
         let pid = process.processIdentifier
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             if process.isRunning { kill(pid, SIGKILL) }
@@ -764,7 +921,9 @@ final class AppModel {
     }
 
     func stopAll() {
-        cancelledStarts.formUnion(starting)
+        startTokens.removeAll()
+        starting.removeAll()
+        retryOnExit.removeAll()
         stopping.formUnion(running.keys)
         for game in games where running[game.id] != nil {
             gameApps(for: game).forEach { kill($0.processIdentifier, SIGTERM) }
@@ -774,8 +933,8 @@ final class AppModel {
         installerRunning = false
     }
 
-    /// ⌘Q in Decanter: games shouldn't outlive the launcher. The wineserver -k processes
-    /// started here finish their job even after Decanter has exited.
+    /// Pressing ⌘Q in Decanter quits the games too, since they shouldn't outlive the launcher.
+    /// The wineserver -k processes started here finish their job even after Decanter has exited.
     func quitAllGamesForExit() {
         guard !running.isEmpty || !starting.isEmpty else { return }
         stopAll()
@@ -792,8 +951,9 @@ final class AppModel {
         }
     }
 
-    /// The running games an app belongs to. A game played "inside a window" shows up as
-    /// Wine's explorer.exe, which can't be told apart, so any Wine app means all of them.
+    /// The running games an app belongs to. When a game's window belongs to a different .exe
+    /// (a launcher's, or Unreal's -Shipping.exe), there's no telling which game it is, so any
+    /// Wine app counts as all of them.
     func runningGames(shownBy app: NSRunningApplication) -> [Game] {
         let playing = games.filter { running[$0.id] != nil }
         guard !playing.isEmpty, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return [] }
@@ -813,7 +973,7 @@ final class AppModel {
 
     func quitFrontmostGame() {
         guard let front = NSWorkspace.shared.frontmostApplication else { return }
-        runningGames(shownBy: front).forEach(stop)
+        runningGames(shownBy: front).forEach { stop($0) }
         quitHotKey.isEnabled = false
     }
 
@@ -837,6 +997,11 @@ final class AppModel {
                 let before = programFolders(wine.engine)
                 let args = url.pathExtension.lowercased() == "msi" ? ["msiexec", "/i", url.path] : [url.path]
                 try await Wine.runAndWait(wine, args, cwd: url.deletingLastPathComponent())
+                // Many installers start the real setup and quit, so wait for whatever they left
+                // running. Don't wait if a game is using this Windows environment, though.
+                let gameUsesEngine = running.keys.contains { runningWine[$0]?.engine == wine.engine }
+                    || starting.contains { game($0)?.engine == wine.engine }
+                if !gameUsesEngine { await Wine.waitUntilIdle(wine, timeout: 600) }
                 let newFolders = programFolders(wine.engine).subtracting(before)
                 installerRunning = false
                 chooseInstalledGame(in: wine.engine, startingIn: newFolders.count == 1 ? newFolders.first : nil)
@@ -893,22 +1058,33 @@ final class AppModel {
         }
     }
 
-    /// Deletes an engine's Windows environment (installed programs, saves stored in it, settings).
+    /// Deletes an engine's Windows environment, along with the programs, saves and settings in
+    /// it. The folder is moved aside straight away and deleted in the background. Anything that
+    /// needs the environment in the meantime waits, then makes a fresh one.
     func resetPrefix(_ engine: Engine) {
+        guard resetTasks[engine] == nil else { return }
         for game in games where game.engine == engine && (running[game.id] != nil || starting.contains(game.id)) {
             stop(game)
         }
-        Task {
+        installs[engine] = .working("Resetting \(engine.title)’s Windows environment…", nil)
+        resetTasks[engine] = Task {
             if let wine = engines[engine] {
                 _ = try? await Shell.run(wine.wineserver, ["-k"], environment: Wine.environment(for: wine))
             }
-            do {
-                if FileManager.default.fileExists(atPath: engine.prefix.path) {
-                    try FileManager.default.removeItem(at: engine.prefix)
+            let fm = FileManager.default
+            let prefix = engine.prefix
+            if fm.fileExists(atPath: prefix.path) {
+                let aside = prefix.deletingLastPathComponent()
+                    .appendingPathComponent(".\(prefix.lastPathComponent)-reset-\(UUID().uuidString)")
+                do {
+                    try fm.moveItem(at: prefix, to: aside)
+                    Task.detached(priority: .background) { try? FileManager.default.removeItem(at: aside) }
+                } catch {
+                    alert = "Couldn’t reset: \(error.localizedDescription)"
                 }
-            } catch {
-                alert = "Couldn’t reset: \(error.localizedDescription)"
             }
+            installs[engine] = nil
+            resetTasks[engine] = nil
         }
     }
 }

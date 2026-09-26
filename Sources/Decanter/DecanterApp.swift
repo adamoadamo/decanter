@@ -27,7 +27,7 @@ struct DecanterApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Finder "Open With Decanter" or dropping an .exe on the Dock icon.
+    /// Called for Finder's "Open With Decanter", or when an .exe is dropped on the Dock icon.
     func application(_ application: NSApplication, open urls: [URL]) {
         Task { @MainActor in
             let model = AppModel.shared
@@ -65,17 +65,58 @@ struct AppCommands: Commands {
                 .disabled(model.needsSetup)
         }
         CommandMenu("Game") {
-            Button("Play") { model.game(model.selection).map { model.play($0) } }
+            let game = model.game(model.selection)
+            Button("Play") { game.map { model.play($0) } }
                 .keyboardShortcut("r")
-                .disabled(model.needsSetup || model.selection == nil)
-            Button("Stop") { model.game(model.selection).map(model.stop) }
+                .disabled(model.needsSetup || game == nil)
+            // Also cancels a game that's still starting.
+            Button("Stop") { game.map { model.stop($0) } }
                 .keyboardShortcut(".")
-                .disabled(model.selection.flatMap { model.running[$0] } == nil)
+                .disabled(game.map { model.running[$0.id] == nil && !model.starting.contains($0.id) } ?? true)
+            Divider()
+            Button("Show in Finder") { game.map { NSWorkspace.shared.activateFileViewerSelecting([$0.url]) } }
+                .disabled(game == nil)
+            Button("Rename…") { model.renaming = game }
+                .disabled(game == nil)
+            Button("Remove from Library…") { game.map { model.requestRemoval(of: $0) } }
+                .disabled(game == nil)
             Divider()
             Button("Wine Configuration…") { model.openWineTool("winecfg", engine: model.selectedEngine) }
             Button("Show C: Drive in Finder") { model.showDriveC(model.selectedEngine) }
             Divider()
             Button("Force Quit All Windows Programs") { model.stopAll() }
         }
+        CommandGroup(replacing: .help) {
+            Button("Decanter Help") { NSWorkspace.shared.open(HelpLinks.readme) }
+                .keyboardShortcut("?")
+            Button("Report a Problem…") { NSWorkspace.shared.open(HelpLinks.newIssue) }
+        }
+    }
+}
+
+/// Where the Help menu goes: the README, and a new GitHub issue that already says which
+/// Decanter and macOS it's about.
+enum HelpLinks {
+    static let readme = URL(string: "https://github.com/\(Updates.repo)#readme")!
+
+    static var newIssue: URL {
+        let body = """
+            Decanter \(Updates.currentVersion) (\(Updates.build)), macOS \(ProcessInfo.processInfo.operatingSystemVersionString)
+
+            **What happened?**
+
+
+            **Which game, and where is it from?**
+
+
+            **The game's log** (open Log under the game and press Copy, then paste it here):
+
+            ```
+
+            ```
+            """
+        var components = URLComponents(string: "https://github.com/\(Updates.repo)/issues/new")!
+        components.queryItems = [URLQueryItem(name: "body", value: body)]
+        return components.url!
     }
 }

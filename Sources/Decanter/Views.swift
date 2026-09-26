@@ -48,6 +48,18 @@ struct ContentView: View {
         } message: {
             Text("Run it to install the game into Decanter’s Windows environment. You’ll pick the installed game afterwards.")
         }
+        .confirmationDialog(
+            "Remove “\(model.pendingRemoval?.name ?? "")” from the library?",
+            isPresented: Binding(get: { model.pendingRemoval != nil }, set: { if !$0 { model.pendingRemoval = nil } }),
+            presenting: model.pendingRemoval
+        ) { game in
+            Button("Remove", role: .destructive) { model.remove(game) }
+        } message: { _ in
+            Text("The game’s files aren’t deleted.")
+        }
+        .sheet(item: $model.renaming) { game in
+            RenameSheet(game: game)
+        }
         .alert(model.alert ?? "", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {}
         .alert("Decanter \(model.update?.version ?? "") is available",
                isPresented: Binding(get: { model.update != nil }, set: { if !$0 { model.update = nil } }),
@@ -84,33 +96,65 @@ struct ContentView: View {
 
 struct LibrarySidebar: View {
     @Environment(AppModel.self) private var model
+    @State private var search = ""
+    @FocusState private var focused: Bool
+
+    private var shownGames: [Game] {
+        search.isEmpty ? model.sortedGames : model.sortedGames.filter { $0.name.localizedStandardContains(search) }
+    }
 
     var body: some View {
         @Bindable var model = model
         List(selection: $model.selection) {
             Section("Games") {
-                ForEach(model.sortedGames) { game in
-                    GameRow(game: game)
-                        .tag(game.id)
-                        .contextMenu {
-                            if model.running[game.id] != nil {
-                                Button("Stop") { model.stop(game) }
-                            } else {
-                                Button("Play") { model.play(game) }.disabled(model.needsSetup)
-                            }
-                            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([game.url]) }
-                            Divider()
-                            Button("Remove from Library") { model.remove(game) }
-                        }
+                ForEach(shownGames) { game in
+                    GameRow(game: game).tag(game.id)
                 }
             }
         }
+        // The window opens with the game list focused, so arrow keys pick a game.
+        .focused($focused)
+        .defaultFocus($focused, true)
+        .searchable(text: $search, placement: .sidebar, prompt: "Search Games")
+        .contextMenu(forSelectionType: Game.ID.self) { ids in
+            if let game = ids.first.flatMap(model.game) {
+                GameMenuItems(game: game)
+            } else {
+                Button("Add Game…") { model.showAddPanel() }
+            }
+        } primaryAction: { ids in
+            // This runs on a double-click or when Return is pressed.
+            if let game = ids.first.flatMap(model.game), model.running[game.id] == nil { model.play(game) }
+        }
+        .onDeleteCommand {
+            if let game = model.game(model.selection) { model.requestRemoval(of: game) }
+        }
         .overlay {
             if model.games.isEmpty {
-                Text("Drop .exe files here")
-                    .foregroundStyle(.secondary)
+                Text("Drop .exe files here").foregroundStyle(.secondary)
+            } else if shownGames.isEmpty {
+                Text("No Games Found").foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// A game's right-click menu.
+struct GameMenuItems: View {
+    @Environment(AppModel.self) private var model
+    let game: Game
+
+    var body: some View {
+        if model.running[game.id] != nil || model.starting.contains(game.id) {
+            Button("Stop") { model.stop(game) }
+        } else {
+            Button("Play") { model.play(game) }.disabled(model.needsSetup)
+        }
+        Divider()
+        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([game.url]) }
+        Button("Rename…") { model.renaming = game }
+        Divider()
+        Button("Remove from Library…") { model.requestRemoval(of: game) }
     }
 }
 
@@ -164,10 +208,7 @@ struct GameIcon: View {
 struct GameDetailView: View {
     @Environment(AppModel.self) private var model
     let gameID: UUID
-    @State private var confirmRemove = false
     @State private var showLog = false
-
-    private static let sizes = ["800x600", "1024x768", "1280x720", "1280x800", "1600x900", "1920x1080"]
 
     var body: some View {
         if let game = model.game(gameID), let binding = model.binding(for: gameID) {
@@ -179,27 +220,45 @@ struct GameDetailView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(game.name)
                                 .font(.title.bold())
-                            Button {
-                                NSWorkspace.shared.activateFileViewerSelecting([game.url])
-                            } label: {
-                                Text((game.exePath as NSString).abbreviatingWithTildeInPath)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                            Group {
+                                let maker = model.maker(of: game)
+                                switch (maker, game.lastPlayed) {
+                                case let (maker?, date?):
+                                    Text("Made with \(maker.title) · Last played \(date, format: .relative(presentation: .named))")
+                                case let (maker?, nil):
+                                    Text("Made with \(maker.title)")
+                                case let (nil, date?):
+                                    Text("Last played \(date, format: .relative(presentation: .named))")
+                                case (nil, nil):
+                                    EmptyView()
+                                }
                             }
-                            .buttonStyle(.link)
-                            .help("Show in Finder")
-                            if let date = game.lastPlayed {
-                                Text("Last played \(date, format: .relative(presentation: .named))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                         }
                     }
                     .padding(.vertical, 6)
 
-                    HStack {
+                    HStack(spacing: 10) {
                         playButton(game)
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([game.url])
+                        } label: {
+                            Label("Show in Finder", systemImage: "folder")
+                                .labelStyle(.iconOnly)
+                        }
+                        .controlSize(.extraLarge)
+                        .help("Show in Finder")
+                        .disabled(!FileManager.default.fileExists(atPath: game.exePath))
                         Spacer()
+                    }
+                    if !FileManager.default.fileExists(atPath: game.exePath) {
+                        HStack {
+                            Label("Can’t find the game file. Was it moved or deleted?", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Locate…") { model.locate(game) }
+                        }
                     }
                     if model.starting.contains(gameID), case let .working(message, fraction) = model.installState(game.engine) {
                         VStack(alignment: .leading, spacing: 4) {
@@ -219,7 +278,7 @@ struct GameDetailView: View {
 
                 Section("Options") {
                     let busy = model.running[gameID] != nil || model.starting.contains(gameID)
-                    // Picks the engine and graphics, and tries another setup if the game closes as it starts.
+                    // When on, Decanter picks the engine and graphics, and tries another setup if the game closes as it starts.
                     Toggle("Choose automatically", isOn: Binding(get: { game.automatic }, set: { model.setAutomatic($0, for: gameID) }))
                     .disabled(busy)
                     // Picking either by hand turns automatic off.
@@ -240,17 +299,19 @@ struct GameDetailView: View {
                         })) {
                             ForEach(Graphics.allCases) { Text($0.title).tag($0) }
                         } label: {
-                            Text("Graphics")  // Direct3D 10/11 only.
+                            Text("Graphics")  // This only affects Direct3D 10 and 11.
                         }
                         .disabled(busy)
                     }
-                    Toggle("Run inside a window", isOn: binding.virtualDesktop)
-                    if game.virtualDesktop {
-                        Picker("Window size", selection: binding.desktopSize) {
-                            ForEach(Self.sizes, id: \.self) { Text($0.replacingOccurrences(of: "x", with: " × ")) }
-                        }
+                    // Only some engines can be told how to open. The rest decide for themselves.
+                    let settable = model.maker(of: game)?.canSetDisplay ?? false
+                    Picker("Display", selection: Binding(get: { settable ? game.display : .gameSetting },
+                                                         set: { binding.wrappedValue.display = $0 })) {
+                        ForEach(Display.allCases) { Text($0.title).tag($0) }
                     }
-                    TextField("Launch options", text: binding.arguments, prompt: Text("e.g. -windowed"))
+                    .disabled(!settable)
+                    .help(settable ? "Takes effect the next time the game starts."
+                                   : "This game decides for itself. Look for the option in its own settings.")
                 }
 
                 Section {
@@ -282,15 +343,10 @@ struct GameDetailView: View {
                 }
 
                 Section {
-                    Button("Remove from Library…", role: .destructive) { confirmRemove = true }
+                    Button("Remove from Library…", role: .destructive) { model.requestRemoval(of: game) }
                 }
             }
             .formStyle(.grouped)
-            .confirmationDialog("Remove “\(game.name)” from the library?", isPresented: $confirmRemove) {
-                Button("Remove", role: .destructive) { model.remove(game) }
-            } message: {
-                Text("The game’s files aren’t deleted.")
-            }
         }
     }
 
@@ -321,6 +377,7 @@ struct GameDetailView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.extraLarge)
+            .disabled(!FileManager.default.fileExists(atPath: game.exePath))
         }
     }
 }
@@ -490,6 +547,41 @@ private struct EngineSettings: View {
     }
 }
 
+// MARK: - Rename
+
+struct RenameSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let game: Game
+    @State private var name: String
+
+    init(game: Game) {
+        self.game = game
+        _name = State(initialValue: game.name)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rename “\(game.name)”").font(.headline)
+            TextField("Name", text: $name)
+                .labelsHidden()
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename") {
+                    model.rename(game.id, to: name)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .frame(width: 340)
+        .padding(20)
+    }
+}
+
 // MARK: - About
 
 struct AboutView: View {
@@ -511,7 +603,7 @@ struct AboutView: View {
                     .buttonStyle(.borderedProminent)
             } else {
                 Button("Check for Updates") { model.checkForUpdates(userInitiated: true, answerInAbout: true) }
-                    .disabled(model.updateStatus == .checking)
+                    .disabled(model.updateStatus == .checking || model.updateStatus.isInstalling)
             }
         }
         .padding(28)

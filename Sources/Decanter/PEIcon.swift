@@ -14,7 +14,7 @@ enum PEIcon {
     static func icoData(from data: Data) -> Data? {
         let b = Bytes(data: data)
 
-        // DOS header -> PE header -> optional header -> resource data directory.
+        // Find the resource directory by following the DOS header to the PE header and its optional header.
         guard b.u16(0) == 0x5A4D, let pe = b.u32(0x3C), b.u32(pe) == 0x4550,
               let sectionCount = b.u16(pe + 6), let optionalSize = b.u16(pe + 20) else { return nil }
         let optional = pe + 24
@@ -51,7 +51,7 @@ enum PEIcon {
                              isDirectory: target & 0x8000_0000 != 0)
             }
         }
-        // Follows the first entry at each level (name -> language) down to the bytes.
+        // Follows the first entry at each level (the name, then the language) down to the bytes.
         func leaf(_ entry: Entry, depth: Int = 0) -> Data? {
             if entry.isDirectory {
                 guard depth < 3, let first = entries(entry.target).first else { return nil }
@@ -85,7 +85,7 @@ enum PEIcon {
         }
         guard !parts.isEmpty else { return nil }
 
-        // Rebuild as an .ico file: header, 16-byte directory entries, image data.
+        // Put it back together as an .ico file: a header, then 16-byte directory entries, then the images.
         var ico = Data([0, 0, 1, 0])
         ico.appendLE16(parts.count)
         var offset = 6 + parts.count * 16
@@ -100,7 +100,7 @@ enum PEIcon {
     }
 }
 
-/// Bounds-checked little-endian reads, so a malformed file just yields nil.
+/// Little-endian reads that check their bounds, so a malformed file just gives nil.
 private struct Bytes {
     let data: Data
 

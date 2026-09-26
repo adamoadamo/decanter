@@ -16,7 +16,9 @@ The only secrets are the private key and the notary password, and both stay in t
 
 ## Current state
 
-- Latest release: 1.2.3 (build 6): Decanter installs updates itself (Install and Relaunch). Notarised 26 Sep 2026 (submission `052993ea-43b9-4a14-8e56-96c36720055f`), published as [v1.2.3](https://github.com/adamoadamo/decanter/releases/tag/v1.2.3). The next release needs a new version number.
+- Latest release: 1.2.4 (build 7): Decanter works out what each game was made with before starting it, a Display option (full screen or windowed) replaces Run inside a window and Launch options, plus search, Rename, Locate, Show in Finder, double-click to play and fixes. Notarised 26 Sep 2026 (submission `2d9c87f8-a6b2-4185-8ca6-29e3205b3020`), published as [v1.2.4](https://github.com/adamoadamo/decanter/releases/tag/v1.2.4). The next release needs a new version number.
+- If a release stops saving one of a game's settings, add its key to `Game.retiredKeys` in `AppModel.swift`. Otherwise everyone who updates is told "Part of your game library couldn't be read", because the old key would be lost when the library is saved. 1.2.4 retired `virtualDesktop` and `desktopSize`.
+- 1.2.3 (build 6): Decanter installs updates itself (Install and Relaunch). Submission `052993ea-43b9-4a14-8e56-96c36720055f`, [v1.2.3](https://github.com/adamoadamo/decanter/releases/tag/v1.2.3).
 - From 1.2.3 on, an update is installed from the release's `.zip` asset, which must be signed with the same Developer ID and bundle id, so always attach the notarised zip (`build.sh --release` does). 1.2.2 and earlier only open the release page.
 - 1.2.2 (build 5): the new icon, and a game's name is no longer editable. Submission `a83ad9db-cca7-443b-90ed-14f25d8ce7ab`, [v1.2.2](https://github.com/adamoadamo/decanter/releases/tag/v1.2.2).
 - 1.2.1 (build 4): bigger icon, Check for Updates in About, a check on every launch. Submission `a5725f1b-b9fe-4a12-a221-7dd1c302a969`, [v1.2.1](https://github.com/adamoadamo/decanter/releases/tag/v1.2.1).
